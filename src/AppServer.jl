@@ -183,7 +183,6 @@ function handle_request(req::HTTP.Request, res::HTTP.Response, ip::Sockets.IPv4 
     Genie.Headers.set_headers!(req, res, Genie.Router.route_request(req, res, ip))
   catch ex
     @error ex
-    rethrow(ex)
   end
 end
 
