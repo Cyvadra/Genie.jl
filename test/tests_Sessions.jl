@@ -1,6 +1,6 @@
-@testset "Sessions functionality" begin
+@safetestset "Sessions functionality" begin
 
-  @testset "Simple session setting and getting" begin
+  @safetestset "Simple session setting and getting" begin
     using Genie, Genie.Sessions
     using Genie.Router
     using HTTP
@@ -9,19 +9,21 @@
     Sessions.init()
 
     route("/home") do
-      sess = Sessions.session(Genie.Router.@params)
+      sess = Sessions.session(params())
       Sessions.set!(sess, :visit_count, Sessions.get(sess, :visit_count, 0)+1)
 
       "$(Sessions.get(sess, :visit_count))"
     end
 
-    Genie.up(; open_browser = false)
+    server = up()
 
     # TODO: extend to use the cookie and increment the count
     response = HTTP.get("http://$(Genie.config.server_host):$(Genie.config.server_port)/home")
     @test response.body |> String == "1"
 
-    Genie.down()
+    down()
+    sleep(1)
+    server = nothing
   end;
 
 end;

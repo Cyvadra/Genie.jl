@@ -5,8 +5,6 @@ module App
 
 import Genie
 
-const ASSET_FINGERPRINT = ""
-
 
 ### PRIVATE ###
 
@@ -22,8 +20,13 @@ function bootstrap(context::Union{Module,Nothing} = Genie.default_context(contex
     isfile(joinpath(Genie.config.path_env, ENV["GENIE_ENV"] * ".jl")) && Base.include(context, joinpath(Genie.config.path_env, ENV["GENIE_ENV"] * ".jl"))
   else
     ENV["GENIE_ENV"] = Genie.Configuration.DEV
-    Core.eval(context, Meta.parse("const config = Genie.Configuration.Settings(app_env = Genie.Configuration.DEV)"))
+    isdefined(context, :config) || Core.eval(context, Meta.parse("const config = Genie.Configuration.Settings(app_env = Genie.Configuration.DEV)"))
   end
+
+  haskey(ENV, "PORT") && (! isempty(ENV["PORT"])) && (context.config.server_port = parse(Int, ENV["PORT"]))
+  haskey(ENV, "WSPORT") && (! isempty(ENV["WSPORT"])) && (context.config.websockets_port = parse(Int, ENV["WSPORT"]))
+  haskey(ENV, "HOST") && (! isempty(ENV["HOST"])) && (context.config.server_host = ENV["HOST"])
+  haskey(ENV, "HOST") || (ENV["HOST"] = context.config.server_host)
 
   for f in fieldnames(typeof(context.config))
     setfield!(Genie.config, f, getfield(context.config, f))
@@ -43,8 +46,6 @@ function bootstrap(context::Union{Module,Nothing} = Genie.default_context(contex
   printstyled("| Docs: https://genieframework.github.io/Genie.jl/dev\n", color = :light_black, bold = true)
   printstyled("| Gitter: https://gitter.im/essenciary/Genie.jl\n", color = :light_black, bold = true)
   printstyled("| Twitter: https://twitter.com/GenieMVC\n\n", color = :light_black, bold = true)
-
-  printstyled("Genie v$(Genie.Configuration.GENIE_VERSION)\n", color = :green, bold = true)
   printstyled("Active env: $(ENV["GENIE_ENV"] |> uppercase)\n\n", color = :light_blue, bold = true)
 
   nothing

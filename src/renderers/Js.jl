@@ -1,12 +1,14 @@
 module Js
 
-import Logging, HTTP
-using Genie, Genie.Renderer
+import Logging, HTTP, Reexport
 
-const JS_FILE_EXT   = ["js.jl"]
-const TEMPLATE_EXT  = [".flax.js", ".jl.js"]
+Reexport.@reexport using Genie
+Reexport.@reexport using Genie.Renderer
 
-const SUPPORTED_JS_OUTPUT_FILE_FORMATS = TEMPLATE_EXT
+const JS_FILE_EXT   = ".jl"
+const TEMPLATE_EXT  = ".jl.js"
+
+const SUPPORTED_JS_OUTPUT_FILE_FORMATS = [TEMPLATE_EXT]
 
 const JSString = String
 
@@ -14,23 +16,18 @@ const NBSP_REPLACEMENT = ("&nbsp;"=>"!!nbsp;;")
 
 export js
 
-struct Undefined
-end
 
-const UNDEFINED = Undefined()
-# Genie.Renderer.Json.JSON.show_json(io::Genie.Renderer.Json.JSON.Writer.StructuralContext, context::Genie.Renderer.Json.JSON.Serializations.CommonSerialization, x::Undefined) = Base.print(io, "undefined")
-Genie.Renderer.Json.JSON.lower(x::Undefined) = "__undefined__"
-Base.show(io::IO, x::Undefined) = Base.print(io, "undefined")
-
-
-function get_template(path::String; context::Module = @__MODULE__) :: Function
+function get_template(path::String; context::Module = @__MODULE__, vars...) :: Function
   orig_path = path
 
   path, extension = Genie.Renderer.view_file_info(path, SUPPORTED_JS_OUTPUT_FILE_FORMATS)
 
-  isfile(path) || error("JS file \"$orig_path\" with extensions $SUPPORTED_JS_OUTPUT_FILE_FORMATS does not exist")
-
-  extension in JS_FILE_EXT && return (() -> Base.include(context, path))
+  if ! isfile(path)
+    error_message = length(SUPPORTED_JS_OUTPUT_FILE_FORMATS) == 1 ?
+                    """JS file "$orig_path$(SUPPORTED_JS_OUTPUT_FILE_FORMATS[1])" does not exist""" :
+                    """JS file "$orig_path" with extensions $SUPPORTED_JS_OUTPUT_FILE_FORMATS does not exist"""
+    error(error_message)
+  end
 
   f_name = Genie.Renderer.function_name(path) |> Symbol
   mod_name = Genie.Renderer.m_name(path) * ".jl"
@@ -38,7 +35,7 @@ function get_template(path::String; context::Module = @__MODULE__) :: Function
   f_stale = Genie.Renderer.build_is_stale(path, f_path)
 
   if f_stale || ! isdefined(context, f_name)
-    f_stale && Genie.Renderer.build_module(to_js(read(path, String)), path, mod_name)
+    f_stale && Genie.Renderer.build_module(to_js(read(path, String), extension = extension), path, mod_name)
 
     return Base.include(context, joinpath(Genie.config.path_build, Genie.Renderer.BUILD_NAME, mod_name))
   end
@@ -47,19 +44,25 @@ function get_template(path::String; context::Module = @__MODULE__) :: Function
 end
 
 
-function to_js(data::String; prepend = "\n") :: String
-  string("function $(Genie.Renderer.function_name(data))() \n",
-          Genie.Renderer.injectvars(),
-          prepend,
+function to_js(data::String; prepend = "\n", extension = TEMPLATE_EXT) :: String
+  output = string("function $(Genie.Renderer.function_name(data))($(Genie.Renderer.injectkwvars())) :: String \n", prepend)
+
+  output *= if extension == TEMPLATE_EXT
           "\"\"\"
           $data
-          \"\"\"",
-          "\nend \n")
+          \"\"\""
+  elseif extension == JS_FILE_EXT
+    data
+  else
+    error("Unsuported template extension $extension")
+  end
+
+  string(output, "\nend \n")
 end
 
 
 function render(data::String; context::Module = @__MODULE__, vars...) :: Function
-  Genie.Renderer.registervars(vars...)
+  Genie.Renderer.registervars(; context = context, vars...)
 
   data_hash = hash(data)
   path = "Genie_" * string(data_hash)
@@ -80,9 +83,9 @@ end
 
 
 function render(viewfile::Genie.Renderer.FilePath; context::Module = @__MODULE__, vars...) :: Function
-  Genie.Renderer.registervars(vars...)
+  Genie.Renderer.registervars(; context = context, vars...)
 
-  get_template(string(viewfile), partial = false, context = context)
+  get_template(string(viewfile); partial = false, context = context, vars...)
 end
 
 
@@ -108,12 +111,17 @@ end
 
 function js(data::String; context::Module = @__MODULE__, status::Int = 200,
             headers::Genie.Renderer.HTTPHeaders = Genie.Renderer.HTTPHeaders("Content-Type" => Genie.Renderer.CONTENT_TYPES[:javascript]),
-            forceparse::Bool = false, vars...) :: Genie.Renderer.HTTP.Response
-  if occursin(raw"$", data) || occursin("<%", data) || forceparse
+            forceparse::Bool = false, noparse::Bool = false, vars...) :: Genie.Renderer.HTTP.Response
+  if (occursin(raw"$", data) || occursin("<%", data) || forceparse) && ! noparse
     Genie.Renderer.WebRenderable(render(MIME"application/javascript", data; context = context, vars...), :javascript, status, headers) |> Genie.Renderer.respond
   else
-    Genie.Renderer.WebRenderable(data, :javascript, status, headers) |> Genie.Renderer.respond
+    js!(data; status, headers) |> Genie.Renderer.respond
   end
+end
+
+function js!(data::S; status::Int = 200,
+              headers::Genie.Renderer.HTTPHeaders = Genie.Renderer.HTTPHeaders("Content-Type" => Genie.Renderer.CONTENT_TYPES[:javascript]))::Genie.Renderer.HTTP.Response where {S<:AbstractString}
+  Genie.Renderer.WebRenderable(data, :javascript, status, headers) |> Genie.Renderer.respond
 end
 
 

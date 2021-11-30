@@ -3,7 +3,8 @@ Generates various Genie files.
 """
 module Generator
 
-import SHA, Dates, Pkg, Logging
+import SHA, Dates, Pkg, Logging, UUIDs
+import Inflector
 import Genie
 
 
@@ -23,7 +24,7 @@ Generates a new Genie controller file and persists it to the resources folder.
 function newcontroller(resource_name::String; path::Union{String,Nothing} = nothing, pluralize::Bool = true) :: Nothing
   resource_name = validname(resource_name)
 
-  Genie.Inflector.is_singular(resource_name) && pluralize && (resource_name = Genie.Inflector.to_plural(resource_name))
+  Inflector.is_singular(resource_name) && pluralize && (resource_name = Inflector.to_plural(resource_name))
   resource_name = uppercasefirst(resource_name)
 
   resource_path = path === nothing ? setup_resource_path(resource_name, path = ".") : (ispath(path) ? path : mkpath(path))
@@ -43,8 +44,8 @@ Generates all the files associated with a new resource and persists them to the 
 function newresource(resource_name::String; path::String = ".", pluralize::Bool = true) :: Nothing
   resource_name = validname(resource_name)
 
-  Genie.Inflector.is_singular(resource_name) && pluralize &&
-    (resource_name = Genie.Inflector.to_plural(resource_name))
+  Inflector.is_singular(resource_name) && pluralize &&
+    (resource_name = Inflector.to_plural(resource_name))
 
   resource_path = setup_resource_path(resource_name, path = path)
   for (resource_file, resource_type) in [(controller_file_name(resource_name), :controller)]
@@ -84,7 +85,7 @@ end
 Generates all resouce files and persists them to disk.
 """
 function write_resource_file(resource_path::String, file_name::String, resource_name::String, resource_type::Symbol; pluralize::Bool = true) :: Bool
-  resource_name = (pluralize ? (Genie.Inflector.to_plural(resource_name)) : resource_name) |> Genie.Inflector.from_underscores
+  resource_name = (pluralize ? (Inflector.to_plural(resource_name)) : resource_name) |> Inflector.from_underscores
 
   try
     if resource_type == :controller
@@ -101,7 +102,7 @@ function write_resource_file(resource_path::String, file_name::String, resource_
     if resource_type == :test
       resource_does_not_exist(resource_path, file_name) || return true
       open(joinpath(resource_path, file_name), "w") do f
-        name = pluralize ? (Genie.Inflector.to_singular(resource_name)) : resource_name
+        name = pluralize ? (Inflector.to_singular(resource_name)) : resource_name
         write(f, Genie.FileTemplates.newtest(resource_name,  name))
       end
     end
@@ -231,37 +232,6 @@ function write_secrets_file(app_path::String = ".") :: Nothing
   nothing
 end
 
-"""
-    migrate_secrets_file(app_path=".")
-
-Replace the previous content of `config/secrets.jl` with the new syntax but the same token.
-
-Specifically, the previous syntax of the file is the following, which is now deprecated:
-
-    const SECRET_TOKEN = "token"
-
-This syntax is replaced by the new syntax:
-
-    Genie.secret_token!("token")
-"""
-function migrate_secrets_file(app_path::String = ".") :: Nothing
-  secrets_path = joinpath(app_path, Genie.config.path_config, Genie.SECRETS_FILE_NAME)
-  if isfile(secrets_path)
-    match_deprecated = match(r"SECRET_TOKEN\s*=\s*\"(.*)\"", readline(secrets_path))
-    if match_deprecated != nothing # does the file use the deprecated syntax?
-      open(secrets_path, "w") do f
-        write(f, """Genie.secret_token!("$(match_deprecated.captures[1])") """)
-      end # replace the previous content of the file
-      @info "Successfully migrated $(secrets_path) to a valid syntax."
-    else
-      error("No migration possible; $(secrets_path) is not using a migrate-able syntax.")
-    end
-  else
-    error("No migration possible; $(secrets_path) is not a file.")
-  end
-  return nothing
-end
-
 
 """
     fullstack_app(app_path::String = ".") :: Nothing
@@ -278,11 +248,11 @@ end
 
 
 """
-    new(app_name::String, app_path::String = abspath(app_name), autostart::Bool = true) :: Nothing
+    minimal(app_name::String, app_path::String = abspath(app_name), autostart::Bool = true) :: Nothing
 
 Creates a minimal Genie app.
 """
-function new(app_name::String, app_path::String = "", autostart::Bool = true) :: Nothing
+function minimal(app_name::String, app_path::String = "", autostart::Bool = true) :: Nothing
   app_name = validname(app_name)
   app_path = abspath(app_name)
 
@@ -331,8 +301,6 @@ function microstack_app(app_name::String = ".", app_path::String = ".") :: Nothi
     cp(joinpath(@__DIR__, "..", Genie.NEW_APP_PATH, f), joinpath(app_path, f))
   end
 
-  remove_fingerprint_initializer(app_path)
-
   scaffold(app_name, app_path)
 
   nothing
@@ -356,13 +324,28 @@ end
 
 Writes files used for interacting with the SearchLight ORM.
 """
-function db_support(app_path::String = ".") :: Nothing
+function db_support(app_path::String = ".", include_env::Bool = true, add_dependencies::Bool = true;
+                    testmode::Bool = false, dbadapter::Union{String,Symbol,Nothing} = nothing) :: Nothing
   cp(joinpath(@__DIR__, "..", Genie.NEW_APP_PATH, Genie.config.path_db), joinpath(app_path, Genie.config.path_db), force = true)
 
-  initializer_path = joinpath(app_path, Genie.config.path_initializers, Genie.SEARCHLIGHT_INITIALIZER_FILE_NAME)
-  isfile(initializer_path) || cp(joinpath(@__DIR__, "..", Genie.NEW_APP_PATH, Genie.config.path_initializers, Genie.SEARCHLIGHT_INITIALIZER_FILE_NAME), initializer_path)
+  db_intializer(app_path, include_env)
+
+  add_dependencies && install_db_dependencies(testmode = testmode, dbadapter = dbadapter)
 
   nothing
+end
+
+
+function db_intializer(app_path::String = ".", include_env::Bool = false)
+  initializers_dir = joinpath(app_path, Genie.config.path_initializers)
+  initializer_path = joinpath(initializers_dir, Genie.SEARCHLIGHT_INITIALIZER_FILE_NAME)
+  source_path = joinpath(@__DIR__, "..", Genie.NEW_APP_PATH, Genie.config.path_initializers, Genie.SEARCHLIGHT_INITIALIZER_FILE_NAME) |> normpath
+
+  if !isfile(initializer_path)
+    ispath(initializers_dir) || mkpath(initializers_dir)
+    include_env && cp(joinpath(@__DIR__, "..", Genie.NEW_APP_PATH, Genie.config.path_env), joinpath(app_path, Genie.config.path_env), force = true)
+    cp(source_path, initializer_path)
+  end
 end
 
 
@@ -384,6 +367,7 @@ function write_app_custom_files(path::String, app_path::String) :: Nothing
     pwd() == joinpath(@__DIR__, "bin") && cd(@__DIR__) # allow starting app from bin/ dir
 
     using $(moduleinfo[1])
+    push!(Base.modules_warned_for, Base.PkgId($(moduleinfo[1])))
     $(moduleinfo[1]).main()
     """)
   end
@@ -407,24 +391,19 @@ end
 
 Installs the application's dependencies using Julia's Pkg
 """
-function install_app_dependencies(app_path::String = "."; testmode::Bool = false, dbsupport::Bool = false) :: Nothing
+function install_app_dependencies(app_path::String = "."; testmode::Bool = false,
+                                  dbsupport::Bool = false, dbadapter::Union{String,Symbol,Nothing} = nothing) :: Nothing
   @info "Installing app dependencies"
   Pkg.activate(".")
 
   pkgs = ["Dates", "Logging", "LoggingExtras", "MbedTLS"]
 
   testmode ? Pkg.develop("Genie") : push!(pkgs, "Genie")
+  testmode ? Pkg.develop("Inflector") : push!(pkgs, "Inflector")
 
   Pkg.add(pkgs)
 
-  if dbsupport
-    try
-      Pkg.add("SearchLight")
-      testmode || install_searchlight_dependencies()
-    catch ex
-      @error ex
-    end
-  end
+  dbsupport && install_db_dependencies(testmode = testmode, dbadapter = dbadapter)
 
   @info "Installing dependencies for unit tests"
 
@@ -450,7 +429,9 @@ function generate_project(name::String) :: Nothing
   mktempdir() do tmpdir
     tmp = joinpath(tmpdir, name, "Project.toml")
 
-    Pkg.project(Pkg.API.Context(), name, tmpdir) # generate tmp
+    pkgproject(Pkg.API.Context(), name, tmpdir) # generate tmp
+
+    # Pkg.project(Pkg.stdout_f(), name, tmpdir) # generate tmp
 
     if !isfile("Project.toml")
       mv(tmp, "Project.toml") # move tmp here
@@ -466,25 +447,99 @@ function generate_project(name::String) :: Nothing
 end
 
 
-function install_searchlight_dependencies() :: Nothing # TODO: move this to SearchLight post install
-  backends = ["SQLite", "MySQL", "PostgreSQL"]
+function pkgproject(ctx::Pkg.API.Context, pkg::String, dir::String) :: Nothing
+  name = email = nothing
 
-  println("Please choose the DB backend you want to use: ")
-  for i in 1:length(backends)
-    println("$i. $(backends[i])")
+  gitname = Pkg.LibGit2.getconfig("user.name", "")
+  isempty(gitname) || (name = gitname)
+
+  gitmail = Pkg.LibGit2.getconfig("user.email", "")
+  isempty(gitmail) || (email = gitmail)
+
+  if name === nothing
+      for env in ["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME", "USER", "USERNAME", "NAME"]
+          name = get(ENV, env, nothing)
+          name !== nothing && break
+      end
   end
-  println("Input $(join([1:length(backends)...], ", ", " or ")) and press ENTER to confirm")
-  println()
 
-  choice = try
-    parse(Int, readline())
-  catch _
-    0
+  name === nothing && (name = "Unknown")
+
+  if email === nothing
+      for env in ["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL", "EMAIL"];
+          email = get(ENV, env, nothing)
+          email !== nothing && break
+      end
   end
 
-  (choice in [1, 2, 3]) || return install_searchlight_dependencies()
+  authors = ["$name " * (email === nothing ? "" : "<$email>")]
 
-  Pkg.add("SearchLight$(backends[choice])")
+  uuid = UUIDs.uuid4()
+
+  pkggenfile(ctx, pkg, dir, "Project.toml") do io
+      toml = Dict{String,Any}("authors" => authors,
+                              "name" => pkg,
+                              "uuid" => string(uuid),
+                              "version" => "0.1.0",
+                              )
+      Pkg.TOML.print(io, toml, sorted=true, by=key -> (Pkg.Types.project_key_order(key), key))
+  end
+end
+
+
+function pkggenfile(f::Function, ctx::Pkg.API.Context, pkg::String, dir::String, file::String) :: Nothing
+  path = joinpath(dir, pkg, file)
+  println(ctx.io, "    $(Base.contractuser(path))")
+  mkpath(dirname(path))
+  open(f, path, "w")
+end
+
+
+function install_db_dependencies(; testmode::Bool = false, dbadapter::Union{String,Symbol,Nothing} = nothing) :: Nothing
+  try
+    Pkg.add("SearchLight")
+    testmode || install_searchlight_dependencies(dbadapter)
+  catch ex
+    @error ex
+  end
+
+  nothing
+end
+
+
+function install_searchlight_dependencies(dbadapter::Union{String,Symbol,Nothing} = nothing) :: Nothing # TODO: move this to SearchLight post install
+  backends = ["SQLite", "MySQL", "PostgreSQL"] # todo: this should be dynamic somehow -- maybe by using the future plugins REST API
+
+  adapter::String = if dbadapter === nothing
+    println("Please choose the DB backend you want to use: ")
+    for i in 1:length(backends)
+      println("$i. $(backends[i])")
+    end
+    println("$(length(backends)+1). Other")
+
+    println("Input $(join([1:(length(backends)+1)...], ", ", " or ")) and press ENTER to confirm")
+    println()
+
+    choice = try
+      parse(Int, readline())
+    catch
+      return install_searchlight_dependencies()
+    end
+
+    if choice == (length(backends)+1)
+      println("Please input DB adapter (ex: Oracle, ODBC, JDBC, etc)")
+      println()
+
+      readline()
+    else
+      backends[choice]
+    end
+  else
+    string(dbadapter)
+  end
+
+  Pkg.activate(".")
+  Pkg.add("SearchLight$adapter")
 
   nothing
 end
@@ -504,18 +559,6 @@ function autostart_app(path::String = "."; autostart::Bool = true) :: Nothing
         Run \njulia> Genie.loadapp() \nto load the app's environment
         and then \njulia> up() \nto start the web server on port 8000.")
   end
-
-  nothing
-end
-
-
-"""
-    remove_fingerprint_initializer(app_path::String = ".") :: Nothing
-
-Removes the asset fingerprint initializers if it's not used
-"""
-function remove_fingerprint_initializer(app_path::String = ".") :: Nothing
-  rm(joinpath(app_path, Genie.config.path_initializers, Genie.ASSETS_FINGERPRINT_INITIALIZER_FILE_NAME), force = true)
 
   nothing
 end
@@ -544,6 +587,9 @@ Scaffolds a new Genie app, setting up the file structure indicated by the variou
 - `fullstack::Bool`: the type of app to be bootstrapped. The fullstack app includes MVC structure, DB connection code, and asset pipeline files.
 - `dbsupport::Bool`: bootstrap the files needed for DB connection setup via the SearchLight ORM
 - `mvcsupport::Bool`: adds the files used for HTML+Julia view templates rendering and working with resources
+- `dbadapter::Union{String,Symbol,Nothing} = nothing` : pass the SearchLight database adapter to be used by default
+(one of :MySQL, :SQLite, or :PostgreSQL). If `dbadapter` is `nothing`, an adapter will have to be selected interactivel
+at the REPL, during the app creation process.
 
 # Examples
 ```julia-repl
@@ -572,13 +618,14 @@ julia> Genie.newapp("MyGenieApp")
 ```
 """
 function newapp(app_name::String; autostart::Bool = true, fullstack::Bool = false,
-                dbsupport::Bool = false, mvcsupport::Bool = false, testmode::Bool = false) :: Nothing
+                dbsupport::Bool = false, mvcsupport::Bool = false, testmode::Bool = false,
+                dbadapter::Union{String,Symbol,Nothing} = nothing) :: Nothing
   app_name = validname(app_name)
   app_path = abspath(app_name)
 
   fullstack ? fullstack_app(app_name, app_path) : microstack_app(app_name, app_path)
 
-  (dbsupport || fullstack) ? db_support(app_path) : remove_searchlight_initializer(app_path)
+  (dbsupport || fullstack) ? db_support(app_path, testmode = testmode, dbadapter = dbadapter) : remove_searchlight_initializer(app_path)
 
   mvcsupport && (fullstack || mvc_support(app_path))
 
@@ -596,13 +643,15 @@ function newapp(app_name::String; autostart::Bool = true, fullstack::Bool = fals
     @error ex
   end
 
-  post_create(app_name, app_path; autostart = autostart, testmode = testmode, dbsupport = (dbsupport || fullstack))
+  post_create(app_name, app_path; autostart = autostart, testmode = testmode,
+              dbsupport = (dbsupport || fullstack), dbadapter = dbadapter)
 
   nothing
 end
 
 
-function post_create(app_name::String, app_path::String; autostart::Bool = true, testmode::Bool = false, dbsupport::Bool = false)
+function post_create(app_name::String, app_path::String; autostart::Bool = true, testmode::Bool = false,
+                      dbsupport::Bool = false, dbadapter::Union{String,Symbol,Nothing} = nothing) :: Nothing
   @info "Done! New app created at $app_path"
 
   @info "Changing active directory to $app_path"
@@ -610,7 +659,7 @@ function post_create(app_name::String, app_path::String; autostart::Bool = true,
 
   generate_project(app_name)
 
-  install_app_dependencies(app_path, testmode = testmode, dbsupport = dbsupport)
+  install_app_dependencies(app_path, testmode = testmode, dbsupport = dbsupport, dbadapter = dbadapter)
 
   set_files_mod()
 
@@ -642,9 +691,12 @@ Template for scaffolding a new Genie app suitable for nimble web services.
 - `path::String`: the name of the app and the path where to bootstrap it
 - `autostart::Bool`: automatically start the app once the file structure is created
 - `dbsupport::Bool`: bootstrap the files needed for DB connection setup via the SearchLight ORM
+- `dbadapter::Union{String,Symbol,Nothing} = nothing` : pass the SearchLight database adapter to be used by default
+(one of :MySQL, :SQLite, or :PostgreSQL). If `dbadapter` is `nothing`, an adapter will have to be selected interactivel
+at the REPL, during the app creation process.
 """
-function newapp_webservice(path::String = "."; autostart::Bool = true, dbsupport::Bool = false) :: Nothing
-  newapp(path, autostart = autostart, fullstack = false, dbsupport = dbsupport, mvcsupport = false)
+function newapp_webservice(path::String = "."; autostart::Bool = true, dbsupport::Bool = false, dbadapter::Union{String,Symbol,Nothing} = nothing) :: Nothing
+  newapp(path, autostart = autostart, fullstack = false, dbsupport = dbsupport, mvcsupport = false, dbadapter = dbadapter)
 end
 
 
@@ -656,9 +708,12 @@ Template for scaffolding a new Genie app suitable for MVC web applications (incl
 # Arguments
 - `path::String`: the name of the app and the path where to bootstrap it
 - `autostart::Bool`: automatically start the app once the file structure is created
+- `dbadapter::Union{String,Symbol,Nothing} = nothing` : pass the SearchLight database adapter to be used by default
+(one of :MySQL, :SQLite, or :PostgreSQL). If `dbadapter` is `nothing`, an adapter will have to be selected interactivel
+at the REPL, during the app creation process.
 """
-function newapp_mvc(path::String = "."; autostart::Bool = true) :: Nothing
-  newapp(path, autostart = autostart, fullstack = false, dbsupport = true, mvcsupport = true)
+function newapp_mvc(path::String = "."; autostart::Bool = true, dbadapter::Union{String,Symbol,Nothing} = nothing) :: Nothing
+  newapp(path, autostart = autostart, fullstack = false, dbsupport = true, mvcsupport = true, dbadapter = dbadapter)
 end
 
 
@@ -670,9 +725,12 @@ Template for scaffolding a new Genie app suitable for full stack web application
 # Arguments
 - `path::String`: the name of the app and the path where to bootstrap it
 - `autostart::Bool`: automatically start the app once the file structure is created
+- `dbadapter::Union{String,Symbol,Nothing} = nothing` : pass the SearchLight database adapter to be used by default
+(one of :MySQL, :SQLite, or :PostgreSQL). If `dbadapter` is `nothing`, an adapter will have to be selected interactivel
+at the REPL, during the app creation process.
 """
-function newapp_fullstack(path::String = "."; autostart::Bool = true) :: Nothing
-  newapp(path, autostart = autostart, fullstack = true, dbsupport = true, mvcsupport = true)
+function newapp_fullstack(path::String = "."; autostart::Bool = true, dbadapter::Union{String,Symbol,Nothing} = nothing) :: Nothing
+  newapp(path, autostart = autostart, fullstack = true, dbsupport = true, mvcsupport = true, dbadapter = dbadapter)
 end
 
 

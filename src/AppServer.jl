@@ -3,18 +3,19 @@ Handles Http server related functionality, manages requests and responses and th
 """
 module AppServer
 
-import HTTP, HTTP.IOExtras, HTTP.Sockets
-import Millboard, URIParser, Sockets, Distributed, Logging, MbedTLS
+using HTTP, Sockets
+import Millboard, Distributed, Logging, MbedTLS
 import Genie
+
 
 """
     ServersCollection(webserver::Union{Task,Nothing}, websockets::Union{Task,Nothing})
 
 Represents a object containing references to Genie's web and websockets servers.
 """
-mutable struct ServersCollection
-  webserver::Union{Task,Nothing}
-  websockets::Union{Task,Nothing}
+Base.@kwdef mutable struct ServersCollection
+  webserver::Union{Task,Nothing} = nothing
+  websockets::Union{Task,Nothing} = nothing
 end
 
 """
@@ -22,17 +23,28 @@ end
 
 ServersCollection constant containing references to the current app's web and websockets servers.
 """
-const SERVERS = ServersCollection(nothing, nothing)
-
-"""
-
-  add some irrelevant annotations
-  test conflicts; practice rebase instead of merge
-
-"""
+const SERVERS = ServersCollection[]
+const Servers = SERVERS
 
 
-### PRIVATE ###
+
+function isrunning(server::ServersCollection, prop::Symbol = :webserver) :: Bool
+  isa(getfield(server, prop), Task) && ! istaskdone(getfield(server, prop))
+end
+function isrunning(prop::Symbol = :webserver) :: Bool
+  isempty(SERVERS) ? false : isrunning(SERVERS[1], prop)
+end
+
+function server_status(server::ServersCollection, prop::Symbol) :: Nothing
+  if isrunning(server)
+    @info("✔️ server is running.")
+  else
+    @error("❌ $server is not running.")
+    isa(getfield(server, prop), Task) && fetch(getfield(server, prop))
+  end
+
+  nothing
+end
 
 
 """
@@ -55,11 +67,15 @@ Web Server starting at http://127.0.0.1:8000
 ```
 """
 function startup(port::Int, host::String = Genie.config.server_host;
-                  ws_port::Int = port, async::Bool = ! Genie.config.run_as_server,
-                  verbose::Bool = false, ratelimit::Union{Rational{Int},Nothing} = nothing,
-                  server::Union{Sockets.TCPServer,Nothing} = nothing, wsserver::Union{Sockets.TCPServer,Nothing} = nothing,
+                  ws_port::Int = port,
+                  async::Bool = ! Genie.config.run_as_server,
+                  verbose::Bool = false,
+                  ratelimit::Union{Rational{Int},Nothing} = nothing,
+                  server::Union{Sockets.TCPServer,Nothing} = nothing,
+                  wsserver::Union{Sockets.TCPServer,Nothing} = server,
                   ssl_config::Union{MbedTLS.SSLConfig,Nothing} = Genie.config.ssl_config,
                   open_browser::Bool = false,
+                  reuseaddr::Bool = false,
                   http_kwargs...) :: ServersCollection
 
   if server !== nothing
@@ -75,30 +91,35 @@ function startup(port::Int, host::String = Genie.config.server_host;
 
   update_config(port, host, ws_port)
 
+  new_server = ServersCollection()
+
   if Genie.config.websockets_server && port != ws_port
-    SERVERS.websockets = @async HTTP.listen(host, ws_port; verbose = verbose, rate_limit = ratelimit, server = wsserver, sslconfig = ssl_config, http_kwargs...) do http::HTTP.Stream
+    print_server_status("Web Sockets server starting at $host:$ws_port")
+
+    new_server.websockets = @async HTTP.listen(host, ws_port; verbose = verbose, rate_limit = ratelimit, server = wsserver,
+                                                sslconfig = ssl_config, reuseaddr = reuseaddr, http_kwargs...) do http::HTTP.Stream
       if HTTP.WebSockets.is_upgrade(http.message)
         HTTP.WebSockets.upgrade(http) do ws
           setup_ws_handler(http.message, ws)
         end
       end
     end
-
-    print_server_status("Web Sockets server running at $host:$ws_port")
   end
 
   command = () -> begin
-    HTTP.listen(parse(Sockets.IPAddr, host), port; verbose = verbose, rate_limit = ratelimit, server = server, sslconfig = ssl_config, http_kwargs...) do http::HTTP.Stream
+    HTTP.listen(parse(Sockets.IPAddr, host), port; verbose = verbose, rate_limit = ratelimit, server = server,
+                sslconfig = ssl_config, reuseaddr = reuseaddr, http_kwargs...) do http::HTTP.Stream
       try
         if Genie.config.websockets_server && port == ws_port && HTTP.WebSockets.is_upgrade(http.message)
           HTTP.WebSockets.upgrade(http) do ws
             setup_ws_handler(http.message, ws)
           end
         else
-          HTTP.handle(HTTP.RequestHandlerFunction(setup_http_handler), http)
+          setup_http_streamer(http)
         end
       catch ex
-        @error ex
+        isa(ex, Base.IOError) || @error ex
+        nothing
       end
     end
   end
@@ -106,6 +127,7 @@ function startup(port::Int, host::String = Genie.config.server_host;
   server_url = "$( (ssl_config !== nothing && Genie.config.ssl_enabled) ? "https" : "http" )://$host:$port"
 
   status = if async
+    print_server_status("Web Server starting at $server_url")
     @async command()
   else
     print_server_status("Web Server starting at $server_url - press Ctrl/Cmd+C to stop the server.")
@@ -113,9 +135,7 @@ function startup(port::Int, host::String = Genie.config.server_host;
   end
 
   if status !== nothing && status.state == :runnable
-    SERVERS.webserver = status
-
-    print_server_status("Web Server running at $server_url")
+    new_server.webserver = status
 
     try
       open_browser && openbrowser(server_url)
@@ -125,7 +145,9 @@ function startup(port::Int, host::String = Genie.config.server_host;
     end
   end
 
-  SERVERS
+  push!(SERVERS, new_server)
+
+  new_server
 end
 
 function startup(; port = Genie.config.server_port, ws_port = Genie.config.websockets_port, kwargs...) :: ServersCollection
@@ -135,7 +157,7 @@ end
 const up = startup
 
 
-print_server_status(status::String) = printstyled("\n $status \n", color = :light_blue, bold = true)
+print_server_status(status::String) = @info "\n$status \n"
 
 
 @static if Sys.isapple()
@@ -166,21 +188,44 @@ end
     down(; webserver::Bool = true, websockets::Bool = true) :: ServersCollection
 
 Shuts down the servers optionally indicating which of the `webserver` and `websockets` servers to be stopped.
+It does not remove the servers from the `SERVERS` collection. Returns the collection.
 """
-function down(; webserver::Bool = true, websockets::Bool = true) :: ServersCollection
-  webserver && (@async Base.throwto(SERVERS.webserver, InterruptException()))
-  isnothing(websockets) || (websockets && (@async Base.throwto(SERVERS.websockets, InterruptException())))
+function down(; webserver::Bool = true, websockets::Bool = true) :: Vector{ServersCollection}
+  for i in 1:length(SERVERS)
+    down(SERVERS[i]; webserver, websockets)
+  end
+
+  SERVERS
+end
+
+
+function down(server::ServersCollection; webserver::Bool = true, websockets::Bool = true) :: ServersCollection
+  webserver && (@async Base.throwto(server.webserver, InterruptException()))
+  isnothing(websockets) || (websockets && (@async Base.throwto(server.websockets, InterruptException())))
+
+  server
+end
+
+
+"""
+    function down!(; webserver::Bool = true, websockets::Bool = true) :: Vector{ServersCollection}
+
+Shuts down all the servers and empties the `SERVERS` collection. Returns the empty collection.
+"""
+function down!() :: Vector{ServersCollection}
+  down()
+  empty!(SERVERS)
 
   SERVERS
 end
 
 
 """
-    handle_request(req::HTTP.Request, res::HTTP.Response, ip::IPv4 = IPv4(Genie.config.server_host)) :: HTTP.Response
+    handle_request(req::HTTP.Request, res::HTTP.Response) :: HTTP.Response
 
 Http server handler function - invoked when the server gets a request.
 """
-function handle_request(req::HTTP.Request, res::HTTP.Response, ip::Sockets.IPv4 = Sockets.IPv4(Genie.config.server_host)) :: HTTP.Response
+function handle_request(req::HTTP.Request, res::HTTP.Response) :: HTTP.Response
   try
     req = Genie.Headers.normalize_headers(req)
   catch ex
@@ -188,26 +233,38 @@ function handle_request(req::HTTP.Request, res::HTTP.Response, ip::Sockets.IPv4 
   end
 
   try
-    Genie.Headers.set_headers!(req, res, Genie.Router.route_request(req, res, ip))
+    Genie.Headers.set_headers!(req, res, Genie.Router.route_request(req, res))
   catch ex
-    @error ex
     rethrow(ex)
   end
 end
 
 
+function setup_http_streamer(http::HTTP.Stream)
+  if Genie.config.features_peerinfo
+    try
+      task_local_storage(:peer, Sockets.getpeername( HTTP.IOExtras.tcpsocket(HTTP.Streams.getrawstream(http)) ))
+    catch ex
+      @error ex
+    end
+  end
+
+  HTTP.handle(HTTP.RequestHandlerFunction(setup_http_listener), http)
+end
+
+
 """
-    setup_http_handler(req::HTTP.Request, res::HTTP.Response = HTTP.Response()) :: HTTP.Response
+    setup_http_listener(req::HTTP.Request, res::HTTP.Response = HTTP.Response()) :: HTTP.Response
 
 Configures the handler for the HTTP Request and handles errors.
 """
-function setup_http_handler(req::HTTP.Request, res::HTTP.Response = HTTP.Response()) :: HTTP.Response
+function setup_http_listener(req::HTTP.Request, res::HTTP.Response = HTTP.Response()) :: HTTP.Response
   try
     Distributed.@fetch handle_request(req, res)
   catch ex # ex is a Distributed.RemoteException
     if isa(ex, Distributed.RemoteException) &&
-        isa(ex.captured, Distributed.CapturedException) &&
-          isa(ex.captured.ex, Genie.Exceptions.RuntimeException)
+      hasfield(typeof(ex), :captured) && isa(ex.captured, Distributed.CapturedException) &&
+        hasfield(typeof(ex.captured), :ex) && isa(ex.captured.ex, Genie.Exceptions.RuntimeException)
 
       @error ex.captured.ex
       return Genie.Router.error(ex.captured.ex.code, ex.captured.ex.message, Genie.Router.response_mime(),
@@ -237,7 +294,11 @@ function setup_ws_handler(req::HTTP.Request, ws_client) :: Nothing
       write(ws_client, String(Distributed.@fetch handle_ws_request(req, String(readavailable(ws_client)), ws_client)))
     end
   catch ex
-    @error ex
+    if isa(ex, Distributed.RemoteException) &&
+      hasfield(typeof(ex), :captured) && isa(ex.captured, Distributed.CapturedException) &&
+        hasfield(typeof(ex.captured), :ex) && isa(ex.captured.ex, Genie.Exceptions.RuntimeException)
+      @error ex.captured.ex
+    end
   end
 
   nothing
@@ -245,13 +306,13 @@ end
 
 
 """
-    handle_ws_request(req::HTTP.Request, msg::String, ws_client, ip::IPv4 = IPv4(Genie.config.server_host)) :: String
+    handle_ws_request(req::HTTP.Request, msg::String, ws_client) :: String
 
 Http server handler function - invoked when the server gets a request.
 """
-function handle_ws_request(req::HTTP.Request, msg::String, ws_client, ip::Sockets.IPv4 = Sockets.IPv4(Genie.config.server_host)) :: String
+function handle_ws_request(req::HTTP.Request, msg::String, ws_client) :: String
   isempty(msg) && return "" # keep alive
-  Genie.Router.route_ws_request(req, msg, ws_client, ip)
+  Genie.Router.route_ws_request(req, msg, ws_client)
 end
 
 end

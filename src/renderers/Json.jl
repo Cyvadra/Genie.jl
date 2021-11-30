@@ -1,9 +1,26 @@
 module Json
 
-import JSON, HTTP
-using Genie, Genie.Renderer
+import JSON3, HTTP, Reexport
 
-const JSONParser = JSON
+Reexport.@reexport using Genie
+Reexport.@reexport using Genie.Renderer
+
+module JSONParser
+
+import JSON3
+
+const parse = JSON3.read
+
+const json = JSON3.write
+
+# ugly but necessary
+JSON3.StructTypes.StructType(::T) where {T<:DataType} = JSON3.StructTypes.Struct()
+
+end
+
+using .JSONParser
+
+const JSON = JSONParser
 const JSON_FILE_EXT = ".json.jl"
 const JSONString = String
 
@@ -11,10 +28,36 @@ export JSONString, json
 
 
 function render(viewfile::Genie.Renderer.FilePath; context::Module = @__MODULE__, vars...) :: Function
-  Genie.Renderer.registervars(vars...)
-  Genie.Renderer.injectvars(context)
+  Genie.Renderer.registervars(; context = context, vars...)
 
-  () -> (Base.include(context, string(viewfile)) |> JSONParser.json)
+  path = viewfile |> string
+  partial = true
+
+  f_name = Genie.Renderer.function_name(string(path, partial)) |> Symbol
+  mod_name = Genie.Renderer.m_name(string(path, partial)) * ".jl"
+  f_path = joinpath(Genie.config.path_build, Genie.Renderer.BUILD_NAME, mod_name)
+  f_stale = Genie.Renderer.build_is_stale(path, f_path)
+
+  if f_stale || ! isdefined(context, f_name)
+    Genie.Renderer.build_module(
+      Genie.Renderer.Html.to_julia(read(path, String), nothing, partial = partial, f_name = f_name),
+      path,
+      mod_name,
+      output_path = false
+    )
+
+    Base.include(context, f_path)
+  end
+
+  () -> try
+    getfield(context, f_name)() |> first
+  catch ex
+    if isa(ex, MethodError) && string(ex.f) == string(f_name)
+      Base.invokelatest(getfield(context, f_name)) |> first
+    else
+      rethrow(ex)
+    end
+  end |> JSONParser.json
 end
 
 

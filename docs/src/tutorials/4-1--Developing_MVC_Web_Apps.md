@@ -1,4 +1,4 @@
-Here is a complete walk-through of developing a feature rich MVC app with Genie, including both user facing web pages, a REST API endpoint, and user authentication. 
+Here is a complete walk-through of developing a feature rich MVC app with Genie, including both user facing web pages, a REST API endpoint, and user authentication.
 You can see and clone the full app here: https://github.com/essenciary/genie-watch-tonight
 
 ---
@@ -57,7 +57,7 @@ dev:
 Now let's manually load the database configuration:
 
 ```julia
-julia> include(joinpath("config", "initializers", "searchlight.jl")
+julia> include(joinpath("config", "initializers", "searchlight.jl"))
 SQLite.DB("db/netflix_catalog.sqlite")
 ```
 
@@ -234,7 +234,7 @@ Add CSV.jl as a dependency of the project:
 pkg> add CSV
 ```
 
-And download the dataset: 
+And download the dataset:
 
 ```julia
 julia> download("https://raw.githubusercontent.com/essenciary/genie-watch-tonight/main/db/seeds/netflix_titles.csv", joinpath("db", "seeds", "netflix_titles.csv"))
@@ -298,7 +298,7 @@ Make it look like this:
 <h1 class="display-1 text-center">Watch tonight</h1>
 <%
 if ! isempty(movies)
-  @foreach(movies) do movie
+  for_each(movies) do movie
     partial(joinpath(Genie.config.path_resources, "movies", "views", "_movie.jl.html"), movie = movie)
   end
 else
@@ -344,7 +344,7 @@ Which must look like this:
 
 ```html
 <h4 class="container">
-  Sorry, no results were found for "$(@params(:search_movies))"
+  Sorry, no results were found for "$(params(:search_movies))"
 </h4>
 ```
 
@@ -385,7 +385,7 @@ Now that we can display titles, it's time to implement the search feature. We'll
 
 <%
 if ! isempty(movies)
-  @foreach(movies) do movie
+  for_each(movies) do movie
     partial(joinpath(Genie.config.path_resources, "movies", "views", "_movie.jl.html"), movie = movie)
   end
 else
@@ -408,11 +408,11 @@ And the `MoviesController.search` function after updating the `using` section:
 using Genie, Genie.Renderer, Genie.Renderer.Html, SearchLight, Movies
 
 function search()
-  isempty(strip(@params(:search_movies))) && redirect(:get_movies)
+  isempty(strip(params(:search_movies))) && redirect(:get_movies)
 
   movies = find(Movie,
               SQLWhereExpression("title LIKE ? OR categories LIKE ? OR description LIKE ? OR actors LIKE ?",
-                                  repeat(['%' * @params(:search_movies) * '%'], 4)))
+                                  repeat(['%' * params(:search_movies) * '%'], 4)))
 
   html(:movies, :index, movies = movies)
 end
@@ -436,7 +436,7 @@ using Genie, Genie.Renderer, Genie.Renderer.Html, SearchLight, Movies, Genie.Ren
 function search_api()
   movies = find(Movie,
               SQLWhereExpression("title LIKE ? OR categories LIKE ? OR description LIKE ? OR actors LIKE ?",
-                                  repeat(['%' * @params(:search_movies) * '%'], 4)))
+                                  repeat(['%' * params(:search_movies) * '%'], 4)))
 
   json(Dict("movies" => movies))
 end
@@ -458,7 +458,7 @@ Now, to install the plugin files:
 julia> GenieAuthentication.install(@__DIR__)
 ```
 
-The plugin has created a create table migration that we need to run UP:
+The plugin has created a create table migration that we need to run `UP`:
 
 ```julia
 julia> SearchLight.Migration.up("CreateTableUsers")
@@ -470,15 +470,18 @@ Let's generate an Admin controller that we'll want to protect by login:
 julia> Genie.Generator.newcontroller("Admin", pluralize = false)
 ```
 
-And manually load the plugin file:
+Only this time, let's load the plugin into the app manually. Upon restarting the application, the plugin will be automatically
+loaded by `Genie`:
 
 ```julia
-include(joinpath("plugins", "genie_authentication.jl"))
+julia> include(joinpath("plugins", "genie_authentication.jl"))
 ```
 
 Time to create an admin user for logging in:
 
 ```julia
+julia> using Users
+
 julia> u = User(email = "admin@admin", name = "Admin", password = Users.hash_password("admin"), username = "admin")
 
 julia> save!(u)
@@ -499,9 +502,8 @@ module AdminController
 
 using GenieAuthentication, Genie.Renderer, Genie.Exceptions, Genie.Renderer.Html
 
-before() = authenticated() || throw(ExceptionalResponse(redirect(:show_login)))
-
 function index()
+  @authenticated!
   h1("Welcome Admin") |> html
 end
 

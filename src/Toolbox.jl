@@ -2,7 +2,8 @@ module Toolbox
 
 import Base.string
 
-import Genie, Genie.Util, Millboard, Genie.FileTemplates, Genie.Configuration, Genie.Inflector, Genie.Exceptions, Logging
+import Inflector
+import Genie, Genie.Util, Millboard, Genie.FileTemplates, Genie.Configuration, Genie.Exceptions, Logging
 
 export TaskResult, VoidTaskResult
 
@@ -29,7 +30,7 @@ Returns a vector of all registered Genie tasks.
 function tasks(context::Module; filter_type_name::Union{Symbol,Nothing} = nothing) :: Vector{TaskInfo}
   tasks = TaskInfo[]
 
-  f = readdir(joinpath(Main.UserApp.ROOT_PATH, Genie.config.path_tasks))
+  f = readdir(normpath(Genie.config.path_tasks))
 
   for i in f
     if ( endswith(i, "Task.jl") )
@@ -62,7 +63,7 @@ Attempts to convert a potentially invalid (partial) `task_name` into a valid one
 """
 function validtaskname(task_name::String) :: String
   task_name = replace(task_name, " "=>"_")
-  task_name = Genie.Inflector.from_underscores(task_name)
+  task_name = Inflector.from_underscores(task_name)
   endswith(task_name, TASK_SUFFIX) || (task_name = task_name * TASK_SUFFIX)
 
   task_name

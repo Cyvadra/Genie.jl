@@ -1,21 +1,15 @@
 @safetestset "SVG API support in Renderer.Html" begin
 
-  @safetestset "" begin
+  @safetestset "SVG API is available" begin
     using Genie
     using Genie.Renderer.Html
+    import Genie.Util: fws
 
-    @test_throws UndefVarError svg()
-  end;
-
-  @safetestset "Update config when custom startup args" begin
-    using Genie
-    using Genie.Renderer.Html
-
-    Html.register_svg_slements()
-    @test svg() == "<svg></svg>"
+    @test svg() |> fws == "<svg></svg>" |> fws
 
     @test_throws UndefVarError clippath()
-    @test clipPath() == "<clipPath></clipPath>"
+
+    @test clipPath() |> fws == "<clipPath></clipPath>" |> fws
   end;
 
 end;

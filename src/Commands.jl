@@ -19,31 +19,23 @@ function execute(config::Genie.Configuration.Settings; server::Union{Sockets.TCP
   # overwrite env settings with command line arguments
   Genie.config.app_env = ENV["GENIE_ENV"]
   Genie.config.server_port = haskey(ENV, "PORT") ? parse(Int, ENV["PORT"]) : parse(Int, parsed_args["p"])
+  Genie.config.websockets_port = haskey(ENV, "WSPORT") ? parse(Int, ENV["WSPORT"]) : parse(Int, parsed_args["w"])
   Genie.config.server_host = parsed_args["l"]
 
   if called_command(parsed_args, "s")
     Genie.config.run_as_server = true
-    Genie.up(Genie.config.server_port, Genie.config.server_host, server = server)
-
-  elseif called_command(parsed_args, "si")
-    Genie.up(Genie.config.server_port, Genie.config.server_host, server = server)
+    Base.invokelatest(Genie.up, Genie.config.server_port, Genie.config.server_host; server = server)
 
   elseif called_command(parsed_args, "r")
     endswith(parsed_args["r"], "Task") || (parsed_args["r"] *= "Task")
-    Genie.Toolbox.loadtasks(Main.UserApp)
+    Base.invokelatest(Genie.Toolbox.loadtasks, Main.UserApp)
     taskname = parsed_args["r"]
+    task = getfield(Main.UserApp, Symbol(taskname))
 
-    @info "Running task $taskname with args $(parsed_args["a"])"
-
-    try
-      task = getfield(Main.UserApp, Symbol(taskname))
-      if parsed_args["a"] !== nothing
-        @info Base.invokelatest(task.runtask, parsed_args["a"])
-      else
-        @info Base.invokelatest(task.runtask)
-      end
-    catch ex
-      @error ex
+    if parsed_args["a"] !== nothing
+      Base.invokelatest(task.runtask, parsed_args["a"])
+    else
+      Base.invokelatest(task.runtask)
     end
   end
 
@@ -62,8 +54,6 @@ function parse_commandline_args(config::Genie.Configuration.Settings) :: Dict{St
 
   settings.description = "Genie web framework CLI"
   settings.epilog = "Visit https://genieframework.com for more info"
-  settings.version = string(Genie.Configuration.GENIE_VERSION)
-  settings.add_version = true
 
   ArgParse.@add_arg_table! settings begin
     "s"
@@ -71,6 +61,10 @@ function parse_commandline_args(config::Genie.Configuration.Settings) :: Dict{St
 
     "-p"
     help = "HTTP server port"
+    default = "$(config.server_port)"
+
+    "-w"
+    help = "Web Sockets server port"
     default = "$(config.server_port)"
 
     "-l"

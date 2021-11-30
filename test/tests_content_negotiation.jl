@@ -5,10 +5,13 @@
       using Genie
       using HTTP
 
-      up(; open_browser = false)
+      port = nothing
+      port = rand(8500:8900)
+
+      server = up(port; open_browser = false)
 
       response = try
-        HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["Content-Type" => "text/html"])
+        HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["Content-Type" => "text/html"])
       catch ex
         ex.response
       end
@@ -18,7 +21,7 @@
       @test Dict(response.headers)["Content-Type"] == "text/html"
 
       response = try
-        HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["COnTeNT-TyPe" => "text/html"])
+        HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["COnTeNT-TyPe" => "text/html"])
       catch ex
         ex.response
       end
@@ -29,16 +32,21 @@
 
       down()
       sleep(1)
+      server = nothing
+      port = nothing
     end
 
     @safetestset "Not found matches request type -- Accept -- custom HTML Genie page" begin
       using Genie
       using HTTP
 
-      up(; open_browser = false)
+      port = nothing
+      port = rand(8500:8900)
+
+      server = up(port; open_browser = false)
 
       response = try
-        HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["Accept" => "text/html"])
+        HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["Accept" => "text/html"])
       catch ex
         ex.response
       end
@@ -48,7 +56,7 @@
       @test Dict(response.headers)["Content-Type"] == "text/html"
 
       response = try
-        HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["AcCePt" => "text/html"])
+        HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["AcCePt" => "text/html"])
       catch ex
         ex.response
       end
@@ -59,16 +67,21 @@
 
       down()
       sleep(1)
+      server = nothing
+      port = nothing
     end
 
     @safetestset "Not found matches request type -- Content-Type -- custom JSON Genie handler" begin
       using Genie
       using HTTP
 
-      up(; open_browser = false)
+      port = nothing
+      port = rand(8500:8900)
+
+      server = up(port; open_browser = false)
 
       response = try
-        HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["Content-Type" => "application/json"])
+        HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["Content-Type" => "application/json"])
       catch ex
         ex.response
       end
@@ -78,7 +91,7 @@
       @test Dict(response.headers)["Content-Type"] == "application/json; charset=utf-8"
 
       response = try
-        HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["CoNtEnt-TyPe" => "application/json"])
+        HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["CoNtEnt-TyPe" => "application/json"])
       catch ex
         ex.response
       end
@@ -89,16 +102,21 @@
 
       down()
       sleep(1)
+      server = nothing
+      port = nothing
     end
 
     @safetestset "Not found matches request type -- Accept -- custom JSON Genie handler" begin
       using Genie
       using HTTP
 
-      up(; open_browser = false)
+      port = nothing
+      port = rand(8500:8900)
+
+      server = up(port; open_browser = false)
 
       response = try
-        HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["Accept" => "application/json"])
+        HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["Accept" => "application/json"])
       catch ex
         ex.response
       end
@@ -108,7 +126,7 @@
       @test Dict(response.headers)["Content-Type"] == "application/json; charset=utf-8"
 
       response = try
-        HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["acCepT" => "application/json"])
+        HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["acCepT" => "application/json"])
       catch ex
         ex.response
       end
@@ -119,16 +137,21 @@
 
       down()
       sleep(1)
+      server = nothing
+      port = nothing
     end
 
     @safetestset "Not found matches request type -- Content-Type -- custom text Genie handler" begin
       using Genie
       using HTTP
 
-      up(; open_browser = false)
+      port = nothing
+      port = rand(8500:8900)
+
+      server = up(port; open_browser = false)
 
       response = try
-        HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["Content-Type" => "text/plain"])
+        HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["Content-Type" => "text/plain"])
       catch ex
         ex.response
       end
@@ -138,7 +161,7 @@
       @test Dict(response.headers)["Content-Type"] == "text/plain"
 
       response = try
-        HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["conTeNT-tYPE" => "text/plain"])
+        HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["conTeNT-tYPE" => "text/plain"])
       catch ex
         ex.response
       end
@@ -149,6 +172,8 @@
 
       down()
       sleep(1)
+      server = nothing
+      port = nothing
     end
   end;
 
@@ -156,10 +181,13 @@
     using Genie
     using HTTP
 
-    up(; open_browser = false)
+    port = nothing
+    port = rand(8500:8900)
+
+    server = up(port; open_browser = false)
 
     response = try
-      HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["Content-Type" => "text/csv"])
+      HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["Content-Type" => "text/csv"])
     catch ex
       ex.response
     end
@@ -169,7 +197,7 @@
     @test Dict(response.headers)["Content-Type"] == "text/csv"
 
     response = try
-      HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["conTeNT-tYPE" => "text/csv"])
+      HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["conTeNT-tYPE" => "text/csv"])
     catch ex
       ex.response
     end
@@ -180,16 +208,21 @@
 
     down()
     sleep(1)
+    server = nothing
+    port = nothing
   end
 
   @safetestset "Not found matches request type -- Accept -- unknown content type get same response" begin
     using Genie
     using HTTP
 
-    up(; open_browser = false)
+    port = nothing
+    port = rand(8500:8900)
+
+    server = up(port; open_browser = false)
 
     response = try
-      HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["Accept" => "text/csv"])
+      HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["Accept" => "text/csv"])
     catch ex
       ex.response
     end
@@ -199,7 +232,7 @@
     @test Dict(response.headers)["Content-Type"] == "text/csv"
 
     response = try
-      HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["accEPT" => "text/csv"])
+      HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["accEPT" => "text/csv"])
     catch ex
       ex.response
     end
@@ -210,16 +243,21 @@
 
     down()
     sleep(1)
+    server = nothing
+    port = nothing
   end
 
   @safetestset "Custom error handler for unknown types" begin
     using Genie
     using HTTP
 
-    up(; open_browser = false)
+    port = nothing
+    port = rand(8500:8900)
+
+    server = up(port; open_browser = false)
 
     response = try
-      HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["Content-Type" => "text/csv"])
+      HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["Content-Type" => "text/csv"])
     catch ex
       ex.response
     end
@@ -233,7 +271,7 @@
     end
 
     response = try
-      HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["conTeNT-tYPE" => "text/csv"])
+      HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["conTeNT-tYPE" => "text/csv"])
     catch ex
       ex.response
     end
@@ -243,7 +281,7 @@
     @test Dict(response.headers)["Content-Type"] == "text/csv"
 
     response = try
-      HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["accept" => "text/csv"])
+      HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["accept" => "text/csv"])
     catch ex
       ex.response
     end
@@ -254,16 +292,21 @@
 
     down()
     sleep(1)
+    server = nothing
+    port = nothing
   end
 
   @safetestset "Custom error handler for known types" begin
     using Genie
     using HTTP
 
-    up(; open_browser = false)
+    port = nothing
+    port = rand(8500:8900)
+
+    server = up(port; open_browser = false)
 
     response = try
-      HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["Content-Type" => "application/json"])
+      HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["Content-Type" => "application/json"])
     catch ex
       ex.response
     end
@@ -277,7 +320,7 @@
     end
 
     response = try
-      HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["conTeNT-tYPE" => "application/json"])
+      HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["conTeNT-tYPE" => "application/json"])
     catch ex
       ex.response
     end
@@ -287,7 +330,7 @@
     @test Dict(response.headers)["Content-Type"] == "application/json"
 
     response = try
-      HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["accept" => "application/json"])
+      HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["accept" => "application/json"])
     catch ex
       ex.response
     end
@@ -298,16 +341,21 @@
 
     down()
     sleep(1)
+    server = nothing
+    port = nothing
   end
 
   @safetestset "Order of accept preferences" begin
     using Genie
     using HTTP
 
-    up(; open_browser = false)
+    port = nothing
+    port = rand(8500:8900)
+
+    server = up(port; open_browser = false)
 
     response = try
-      HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["Accept" => "text/html, text/plain, application/json, text/csv"])
+      HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["Accept" => "text/html, text/plain, application/json, text/csv"])
     catch ex
       ex.response
     end
@@ -315,7 +363,7 @@
     @test Dict(response.headers)["Content-Type"] == "text/html"
 
     response = try
-      HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["Accept" => "text/plain, application/json, text/csv, text/html"])
+      HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["Accept" => "text/plain, application/json, text/csv, text/html"])
     catch ex
       ex.response
     end
@@ -323,7 +371,7 @@
     @test Dict(response.headers)["Content-Type"] == "text/plain"
 
     response = try
-      HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["Accept" => "application/json, text/csv, text/html, text/plain"])
+      HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["Accept" => "application/json, text/csv, text/html, text/plain"])
     catch ex
       ex.response
     end
@@ -331,7 +379,7 @@
     @test Dict(response.headers)["Content-Type"] == "application/json"
 
     response = try
-      HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["Accept" => "text/csv, text/html, text/plain, application/json"])
+      HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["Accept" => "text/csv, text/html, text/plain, application/json"])
     catch ex
       ex.response
     end
@@ -339,7 +387,7 @@
     @test Dict(response.headers)["Content-Type"] == "text/html"
 
     response = try
-      HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["Accept" => "text/csv, text/plain, application/json, text/html"])
+      HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["Accept" => "text/csv, text/plain, application/json, text/html"])
     catch ex
       ex.response
     end
@@ -347,7 +395,7 @@
     @test Dict(response.headers)["Content-Type"] == "text/plain"
 
     response = try
-      HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["Accept" => "text/csv, application/json, text/html, text/plain"])
+      HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["Accept" => "text/csv, application/json, text/html, text/plain"])
     catch ex
       ex.response
     end
@@ -355,7 +403,7 @@
     @test Dict(response.headers)["Content-Type"] == "application/json"
 
     response = try
-      HTTP.request("GET", "http://127.0.0.1:8000/notexisting", ["Accept" => "text/csv"])
+      HTTP.request("GET", "http://127.0.0.1:$port/notexisting", ["Accept" => "text/csv"])
     catch ex
       ex.response
     end
@@ -364,6 +412,8 @@
 
     down()
     sleep(1)
+    server = nothing
+    port = nothing
   end
 
 end;

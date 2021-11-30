@@ -18,7 +18,7 @@ end
 
 Session(id::String) = Session(id, Dict{Symbol,Any}())
 
-export Session
+export Session, session
 
 struct InvalidSessionIdException <: Exception
   msg::String
@@ -115,7 +115,8 @@ Initiates a new HTTP session with the provided `session_id`.
 - `res::HTTP.Response`: the response object
 - `options::Dict{String,String}`: extra options for setting the session cookie, such as `Path` and `HttpOnly`
 """
-function start(session_id::String, req::HTTP.Request, res::HTTP.Response; options::Dict{String,Any} = Genie.config.session_options) :: Tuple{Session,HTTP.Response}
+function start(session_id::String, req::HTTP.Request, res::HTTP.Response;
+                options::Dict{String,Any} = Genie.config.session_options) :: Tuple{Session,HTTP.Response}
   Genie.Cookies.set!(res, Genie.config.session_key_name, session_id, options)
 
   load(session_id), res
@@ -132,7 +133,7 @@ Initiates a new default session object, generating a new session id.
 - `res::HTTP.Response`: the response object
 - `options::Dict{String,String}`: extra options for setting the session cookie, such as `Path` and `HttpOnly`
 """
-function start(req::HTTP.Request, res::HTTP.Response, params::Dict{Symbol,Any} = Dict{Symbol,Any}(); options::Dict{String,Any} = Genie.config.session_options) :: Tuple{HTTP.Request,HTTP.Response,Dict{Symbol,Any}}
+function start(req::HTTP.Request, res::HTTP.Response, params::Dict{Symbol,Any} = Dict{Symbol,Any}(); options::Dict{String,Any} = Genie.config.session_options) :: Tuple{HTTP.Request,HTTP.Response,Dict{Symbol,Any},Session}
   session, res = start(id(req, res), req, res; options = options)
 
   params[Genie.PARAMS_SESSION_KEY]   = session
@@ -150,8 +151,9 @@ function start(req::HTTP.Request, res::HTTP.Response, params::Dict{Symbol,Any} =
                                           end
                                         end
 
-  req, res, params
+  req, res, params, session
 end
+const start! = start
 
 
 """
@@ -164,6 +166,9 @@ function set!(s::Session, key::Symbol, value::Any) :: Session
 
   s
 end
+function set!(key::Symbol, value::Any) :: Session
+  set!(session(), key, value)
+end
 
 
 """
@@ -173,6 +178,9 @@ Returns the value stored on the `Session` object `s` as `key`, wrapped in a `Uni
 """
 function get(s::Session, key::Symbol) :: Union{Nothing,Any}
   haskey(s.data, key) ? (s.data[key]) : nothing
+end
+function get(key::Symbol) :: Union{Nothing,Any}
+  get(session(), key)
 end
 
 
@@ -186,6 +194,18 @@ function get(s::Session, key::Symbol, default::T) :: T where T
   val = get(s, key)
 
   val === nothing ? default : val
+end
+function get(key::Symbol, default::T) :: T where T
+  get(session(), key, default)
+end
+function get!(key::Symbol, default::T) :: T where T
+  get!(session(), key, default)
+end
+function get!(s::Session, key::Symbol, default::T) :: T where T
+  val = get(s, key, default)
+  set!(key, val)
+
+  val
 end
 
 
@@ -232,9 +252,12 @@ function load end
 
 Returns the `Session` object associated with the current HTTP request.
 """
-function session(params::Dict{Symbol,Any}) :: Sessions.Session
+function session(params::Dict{Symbol,Any} = Genie.Router.params()) :: Sessions.Session
   ( (! haskey(params, Genie.PARAMS_SESSION_KEY) || params[Genie.PARAMS_SESSION_KEY] === nothing) ) &&
-      (params[Genie.PARAMS_SESSION_KEY] = Sessions.start(params[Genie.PARAMS_REQUEST_KEY], params[Genie.PARAMS_RESPONSE_KEY])[1])
+    (params = Sessions.start!(
+      Base.get(params, Genie.PARAMS_REQUEST_KEY, HTTP.Request()),
+      Base.get(params, Genie.PARAMS_RESPONSE_KEY, HTTP.Response())
+    )[3])
 
   params[Genie.PARAMS_SESSION_KEY]
 end

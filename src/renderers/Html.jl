@@ -1,28 +1,22 @@
 module Html
 
-import Markdown, Logging, Gumbo, Reexport, OrderedCollections, Millboard, HTTP, YAML
+import EzXML, HTTP, Logging, Markdown, Millboard, OrderedCollections, Reexport, YAML
 
 Reexport.@reexport using Genie
-
-import Genie.Renderer
-import Genie.Renderer: @vars
+Reexport.@reexport using Genie.Renderer
 Reexport.@reexport using HttpCommon
 
 
 const DEFAULT_LAYOUT_FILE = :app
 const LAYOUTS_FOLDER = "layouts"
 
-const HTML_FILE_EXT = [".flax.jl", "html.jl"]
-const TEMPLATE_EXT  = [".flax.html", ".jl.html"]
+const HTML_FILE_EXT = ".jl"
+const TEMPLATE_EXT  = ".jl.html"
 const MARKDOWN_FILE_EXT = [".md", ".jl.md"]
 
-const SUPPORTED_HTML_OUTPUT_FILE_FORMATS = TEMPLATE_EXT
+const SUPPORTED_HTML_OUTPUT_FILE_FORMATS = [TEMPLATE_EXT]
 
-const HTMLString = String
-const HTMLParser = Gumbo
-
-const MD_SEPARATOR_START = "---"
-const MD_SEPARATOR_END   = "---"
+const HTMLParser  = EzXML
 
 const NBSP_REPLACEMENT = ("&nbsp;"=>"!!nbsp;;")
 
@@ -35,25 +29,89 @@ const NORMAL_ELEMENTS = [ :html, :head, :body, :title, :style, :address, :articl
                           :del, :ins, :caption, :col, :colgroup, :table, :tbody, :td, :tfoot, :th, :thead, :tr,
                           :button, :datalist, :fieldset, :label, :legend, :meter,
                           :output, :progress, :select, :option, :textarea, :details, :dialog, :menu, :menuitem, :summary,
-                          :slot, :template, :blockquote, :center, :iframe] #TODO: Gumbo has a problem and strips away <template>
+                          :slot, :template, :blockquote, :center, :iframe]
 const VOID_ELEMENTS   = [:base, :link, :meta, :hr, :br, :area, :img, :track, :param, :source, :input]
 const CUSTOM_ELEMENTS = [:form, :select]
-const NON_EXPORTED = [:main, :map]
-
+const NON_EXPORTED = [:main, :map, :filter]
 const SVG_ELEMENTS = [:animate, :circle, :animateMotion, :animateTransform, :clipPath, :defs, :desc, :discard,
-                      :ellipse, :feComponentTransfer, :feComposite, :feDiffuseLighting, :feDisplacementMap, :feBlend, :feColorMatrix,
+                      :ellipse, :feComponentTransfer, :feComposite, :feDiffuseLighting, :feBlend, :feColorMatrix,
                       :feConvolveMatrix, :feDisplacementMap, :feDistantLight, :feDropShadow, :feFlood, :feFuncA, :feFuncB, :feFuncG,
                       :feFuncR, :feGaussianBlur, :feImage, :feMerge, :feMergeNode, :feMorphology, :feOffset, :fePointLight, :feSpecularLighting,
-                      :feSpotLight, :feTile, :feTurbulence, :filter, :foreignObject, :g, :hatch, :hatchpath, :image, :line, :linearGradient,
+                      :feSpotLight, :feTile, :feTurbulence, :foreignObject, :g, :hatch, :hatchpath, :image, :line, :linearGradient,
                       :marker, :mask, :metadata, :mpath, :path, :pattern, :polygon, :polyline, :radialGradient, :rect, :set, :stop, :svg,
                       :switch, :symbol, :text, :textPath, :tspan, :use, :view]
 
-export HTMLString, html, doc, doctype
-export @foreach, @yield, collection, view!
+const EMBEDDED_JULIA_PLACEHOLDER = "~~~~~|~~~~~"
+
+
+# ParsedHTMLStrings
+struct ParsedHTMLString <: AbstractString
+  data::String
+end
+
+function ParsedHTMLString(v::Vector{T}) where {T}
+  join(v) |> ParsedHTMLString
+end
+
+Base.string(v::Vector{ParsedHTMLString}) = join(v)
+
+ParsedHTMLString(args...) = ParsedHTMLString([args...])
+
+Base.string(s::ParsedHTMLString) = s.data
+Base.String(s::ParsedHTMLString) = string(s)
+
+Base.iterate(s::ParsedHTMLString) = iterate(s.data)
+Base.iterate(s::ParsedHTMLString, x::Int) = iterate(s.data, x)
+
+Base.convert(::Type{ParsedHTMLString}, v::Vector{T}) where {T} = ParsedHTMLString(v)
+
+import Base: (*)
+(*)(s::ParsedHTMLString, t::ParsedHTMLString) = string(s.data, t.data)
+
+# end ParsedHTMLStrings
+
+# HTMLStrings
+struct HTMLString <: AbstractString
+  data::String
+end
+
+function HTMLString(v::Vector{T}) where {T}
+  join(v) |> HTMLString
+end
+
+Base.string(v::Vector{HTMLString}) = join(v)
+Base.string(v::Vector{AbstractString}) = join(v)
+
+HTMLString(args...) = HTMLString([args...])
+
+Base.string(s::HTMLString) = s.data
+Base.String(s::HTMLString) = string(s)
+
+Base.iterate(s::HTMLString) = iterate(s.data)
+Base.iterate(s::HTMLString, x::Int) = iterate(s.data, x)
+
+Base.convert(::Type{HTMLString}, v::Vector{T}) where {T} = HTMLString(v)
+
+import Base: (*)
+(*)(s::HTMLString, t::HTMLString) = string(s.data, t.data)
+
+# end HTMLStrings
+
+# const HTMLString = String
+
+export HTMLString, html, doc, doctype, ParsedHTMLString, html!
+export @yield, collection, view!, for_each
 export partial, template
 
-Genie.Renderer.init_task_local_storage()
 task_local_storage(:__yield, "")
+
+
+include("MdHtml.jl")
+
+
+function contentargs(args...)
+  join(join.(filter((x -> isa(x, AbstractArray)), args)), ""), [filter((x -> !isa(x, AbstractArray)), args)...]
+end
 
 
 """
@@ -62,32 +120,42 @@ task_local_storage(:__yield, "")
 Generates a HTML element in the form <...></...>
 """
 function normal_element(f::Function, elem::Any, args::Vector = [], attrs::Vector{Pair{Symbol,Any}} = Pair{Symbol,Any}[]) :: HTMLString
-  normal_element(f(), string(elem), args, attrs...)
+  normal_element(Base.invokelatest(f), string(elem), args, attrs...)
 end
-function normal_element(children::Union{String,Vector{String}}, elem::Any, args::Vector, attrs::Pair{Symbol,Any}) :: HTMLString
+function normal_element(children::Union{T,Vector{T}}, elem::Any, args::Vector, attrs::Pair{Symbol,Any})::HTMLString where {T<:AbstractString}
   normal_element(children, string(elem), args, Pair{Symbol,Any}[attrs])
 end
 function normal_element(children::Tuple, elem::Any, args::Vector, attrs::Pair{Symbol,Any}) :: HTMLString
   normal_element([children...], string(elem), args, Pair{Symbol,Any}[attrs])
 end
-function normal_element(children::Union{String,Vector{String}}, elem::Any, args::Vector, attrs...) :: HTMLString
+function normal_element(children::Union{T,Vector{T}}, elem::Any, args::Vector, attrs...)::HTMLString where {T<:AbstractString}
   normal_element(children, string(elem), args, Pair{Symbol,Any}[attrs...])
 end
-function normal_element(children::Union{String,Vector{String}}, elem::Any, args::Vector = [], attrs::Vector{Pair{Symbol,Any}} = Pair{Symbol,Any}[]) :: HTMLString
-  children = join(children)
+function normal_element(children::Union{T,Vector{T}}, elem::Any, args::Vector = [], attrs::Vector{Pair{Symbol,Any}} = Pair{Symbol,Any}[])::HTMLString where {T<:AbstractString}
+  content_args, args = contentargs(args...)
+  children = string(join(children), content_args)
 
   idx = findfirst(x -> x == :inner, getindex.(attrs, 1))
-  if !isnothing(idx)
-    children *= string(attrs[idx][2])
+  if idx !== nothing
+    children *= join(attrs[idx][2])
     deleteat!(attrs, idx)
   end
 
-  ii = (x -> x isa Symbol && occursin("__", "$x")).(args)
+  ii = (x -> x isa Symbol && occursin(Genie.config.html_parser_char_dash, "$x")).(args)
   args[ii] .= Symbol.(replace.(string.(args[ii]), Ref(Genie.config.html_parser_char_dash=>"-")))
+
+  htmlsourceindent = extractindent!(attrs)
 
   elem = normalize_element(string(elem))
   attribs = rstrip(attributes(attrs))
-  string("<", elem, (isempty(attribs) ? "" : " $attribs"), (isempty(args) ? "" : " $(join(args, " "))"), ">", prepare_template(children), "</", elem, ">")
+
+  string(
+    htmlsourceindent, # indentation opening tag
+    "<", elem, (isempty(attribs) ? "" : " $attribs"), (isempty(args) ? "" : " $(join(args, " "))"), ">", (Genie.config.format_html_output ? "\n" : ""), # opening tag
+    prepare_template(children), (Genie.config.format_html_output ? "\n" : ""), # content/children
+    htmlsourceindent, # indentation closing tag
+    "</", elem, ">", (Genie.config.format_html_output ? "\n" : "") # closing tag
+  )
 end
 function normal_element(elem::Any, attrs::Vector{Pair{Symbol,Any}} = Pair{Symbol,Any}[]) :: HTMLString
   normal_element("", string(elem), attrs...)
@@ -101,9 +169,9 @@ function normal_element(elems::Vector, elem::Any, args = [], attrs...) :: HTMLSt
     if isa(e, Vector)
       print(io, join(e))
     elseif isa(e, Function)
-      print(io, e(), "\n")
+      print(io, e())
     else
-      print(io, e, "\n")
+      print(io, e)
     end
   end
 
@@ -112,8 +180,27 @@ end
 function normal_element(_::Nothing, __::Any) :: HTMLString
   ""
 end
-function normal_element(children::Vector{T} where T, elem::Any, args::Vector{T} where T) :: HTMLString
+function normal_element(children::Vector{T}, elem::Any, args::Vector{T})::HTMLString where {T}
   normal_element(join([(isa(f, Function) ? f() : string(f)) for f in children]), elem, args)
+end
+
+
+function extractindent!(attrs) :: String
+  indent = if Genie.config.format_html_output
+    htmlsidx = findfirst(x -> x == :htmlsourceindent, getindex.(attrs, 1))
+    if htmlsidx !== nothing
+      indent = Base.parse(Int, attrs[htmlsidx][2])
+      deleteat!(attrs, htmlsidx)
+
+      indent
+    else
+      0
+    end
+  else
+    0
+  end
+
+  repeat(Genie.config.format_html_indentation_string, indent)
 end
 
 
@@ -145,23 +232,30 @@ function attributes(attrs::Vector{Pair{Symbol,Any}} = Vector{Pair{Symbol,Any}}()
 
   for (k,v) in attrs
     v === nothing && continue # skip nothing values
+    v == "false" && (v = false)
 
-    if (isa(v, Bool) && v) || isempty(string(v))
-      print(a, "$(k |> parseattr) ")
-    elseif v isa AbstractString
-      print(a, "$(k |> parseattr)=\"$(v)\" ")
-    elseif v isa Genie.Renderer.Json.JSONParser.JSONText
-      if startswith(v.s, ":")
-        print(a, ":$(k |> parseattr)=$(v.s[2:end]) ")
-      else
-        print(a, "$(k |> parseattr)=$(v.s) ")
-      end
-    else
-      print(a, "$(k |> parseattr)=$(v) ")
-    end
+    print(a, attrparser(k, v))
   end
 
   String(take!(a))
+end
+
+
+function attrparser(k::Symbol, v::Bool) :: String
+  v ? "$(k |> parseattr) " : ""
+end
+
+function attrparser(k::Symbol, v::Union{AbstractString,Symbol}) :: String
+  isempty(string(v)) && return attrparser(k, true)
+  "$(k |> parseattr)=\"$(v)\" "
+end
+
+function attrparser(k::Symbol, v::Any) :: String
+  default_attrparser(k, v)
+end
+
+function default_attrparser(k::Symbol, v::Any) :: String
+  "$(k |> parseattr)=$(v) "
 end
 
 
@@ -172,7 +266,12 @@ Converts Julia keyword arguments to HTML attributes with illegal Julia chars.
 """
 function parseattr(attr) :: String
   attr = string(attr)
-  endswith(attr, Genie.config.html_parser_char_at) && (attr = string("@", attr[1:end-(length(Genie.config.html_parser_char_at))]))
+
+  for (k,v) in Genie.config.html_attributes_replacements
+    attr = replace(attr, k=>v)
+  end
+
+  endswith(attr, Genie.config.html_parser_char_at) && (attr = string("v-on:", attr[1:end-(length(Genie.config.html_parser_char_at))]))
   endswith(attr, Genie.config.html_parser_char_column) && (attr = string(":", attr[1:end-(length(Genie.config.html_parser_char_column))]))
 
   attr = replace(attr, Regex(Genie.config.html_parser_char_dash)=>"-")
@@ -209,79 +308,22 @@ end
 Generates a void HTML element in the form <...>
 """
 function void_element(elem::String, args = [], attrs::Vector{Pair{Symbol,Any}} = Pair{Symbol,Any}[]) :: HTMLString
+  htmlsourceindent = extractindent!(attrs)
   attribs = rstrip(attributes(attrs))
-  string("<", normalize_element(elem), (isempty(attribs) ? "" : " $attribs"), (isempty(args) ? "" : " $(join(args, " "))"), Genie.config.html_parser_close_tag, ">")
+  string(
+    htmlsourceindent, # tag indentation
+    "<", normalize_element(elem), (isempty(attribs) ? "" : " $attribs"), (isempty(args) ? "" : " $(join(args, " "))"), Genie.config.html_parser_close_tag, ">", (Genie.config.format_html_output ? "\n" : "")
+  )
 end
 
 
 """
-    skip_element(f::Function) :: HTMLString
-    skip_element() :: HTMLString
-
-Cleans up empty elements.
-"""
-function skip_element(f::Function) :: HTMLString
-  "$(prepare_template(f()))"
-end
-function skip_element() :: HTMLString
-  ""
-end
-
-
-"""
-    include_markdown(path::String; context::Module = @__MODULE__)
-
-Includes and renders a markdown view file
-"""
-function include_markdown(path::String; context::Module = @__MODULE__)
-  content = string("\"\"\"", eval_markdown(read(path, String), context = context), "\"\"\"")
-  injected_vars = Genie.Renderer.injectvars()
-  injected_vars, (Base.include_string(context, string(injected_vars, content)) |> Markdown.parse |> Markdown.html)
-end
-
-
-"""
-    eval_markdown(md::String; context::Module = @__MODULE__) :: String
-
-Converts the mardown `md` to HTML view code.
-"""
-function eval_markdown(md::String; context::Module = @__MODULE__) :: String
-  if startswith(md, string(MD_SEPARATOR_START, "\n")) ||
-      startswith(md, string(MD_SEPARATOR_START, "\r")) ||
-        startswith(md, string(MD_SEPARATOR_START, "\r\n"))
-    close_sep_pos = findfirst(MD_SEPARATOR_END, md[length(MD_SEPARATOR_START)+1:end])
-    metadata = md[length(MD_SEPARATOR_START)+1:close_sep_pos[end]] |> YAML.load
-
-    isa(metadata, Dict) || (@warn "\nFound Markdown YAML metadata but it did not result in a `Dict` \nPlease check your markdown metadata \n$metadata")
-
-    try
-      for (k,v) in metadata
-        task_local_storage(:__vars)[Symbol(k)] = v
-      end
-    catch ex
-      @error ex
-    end
-
-    md = replace(md[close_sep_pos[end]+length(MD_SEPARATOR_END)+1:end], "\"\"\""=>"\\\"\\\"\\\"")
-  end
-
-  md
-end
-
-
-"""
-    get_template(path::String; partial::Bool = true, context::Module = @__MODULE__) :: Function
+    get_template(path::String; partial::Bool = true, context::Module = @__MODULE__, vars...) :: Function
 
 Resolves the inclusion and rendering of a template file
 """
-function get_template(path::String; partial::Bool = true, context::Module = @__MODULE__) :: Function
-  orig_path = path
-
+function get_template(path::String; partial::Bool = true, context::Module = @__MODULE__, vars...) :: Function
   path, extension = Genie.Renderer.view_file_info(path, SUPPORTED_HTML_OUTPUT_FILE_FORMATS)
-
-  isfile(path) || Base.error("Template file \"$orig_path\" with extensions $SUPPORTED_HTML_OUTPUT_FILE_FORMATS does not exist")
-
-  extension in HTML_FILE_EXT && return (() -> Base.include(context, path))
 
   f_name = Genie.Renderer.function_name(string(path, partial)) |> Symbol
   mod_name = Genie.Renderer.m_name(string(path, partial)) * ".jl"
@@ -289,14 +331,11 @@ function get_template(path::String; partial::Bool = true, context::Module = @__M
   f_stale = Genie.Renderer.build_is_stale(path, f_path)
 
   if f_stale || ! isdefined(context, f_name)
-    content = if extension in MARKDOWN_FILE_EXT
-      vars_injection, md = include_markdown(path, context = context)
-      string_to_julia(md, partial = partial, f_name = f_name, prepend = "", vars_included = true) # vars_injection is prepended already in include_markdown
-    else
-      html_to_julia(path, partial = partial)
+    if extension in MARKDOWN_FILE_EXT
+      path = MdHtml.md_to_html(path, context = context)
     end
 
-    f_stale && Genie.Renderer.build_module(content, path, mod_name)
+    f_stale && Genie.Renderer.build_module(html_to_julia(path, partial = partial, extension = extension), path, mod_name)
 
     return Base.include(context, joinpath(Genie.config.path_build, Genie.Renderer.BUILD_NAME, mod_name))
   end
@@ -308,19 +347,19 @@ end
 """
 Outputs document's doctype.
 """
-function doctype(doctype::Symbol = :html) :: HTMLString
-  "<!DOCTYPE $doctype>"
+@inline function doctype(doctype::Symbol = :html) :: HTMLString
+  string("<!DOCTYPE $doctype>", Genie.config.format_html_output ? "\n" : "")
 end
 
 
 """
 Outputs document's doctype.
 """
-function doc(html::String) :: HTMLString
-  doctype() * "\n" * html
+function doc(html::AbstractString) :: HTMLString
+  string(doctype(), html)
 end
-function doc(doctype::Symbol, html::String) :: HTMLString
-  doctype(doctype) * "\n" * html
+function doc(doctype::Symbol, html::AbstractString) :: HTMLString
+  string(doctype(doctype), html)
 end
 
 
@@ -329,7 +368,7 @@ end
 
 Parses a view file, returning a rendering function. If necessary, the function is JIT-compiled, persisted and loaded into memory.
 """
-function parseview(data::String; partial = false, context::Module = @__MODULE__) :: Function
+function parseview(data::S; partial = false, context::Module = @__MODULE__)::Function where {S<:AbstractString}
   data_hash = hash(data)
   path = "Genie_" * string(data_hash)
 
@@ -355,8 +394,8 @@ end
 
 Renders the string as an HTML view.
 """
-function render(data::String; context::Module = @__MODULE__, layout::Union{String,Nothing} = nothing, vars...) :: Function
-  Genie.Renderer.registervars(vars...)
+function render(data::S; context::Module = @__MODULE__, layout::Union{String,Nothing} = nothing, vars...)::Function where {S<:AbstractString}
+  Genie.Renderer.registervars(; context = context, vars...)
 
   if layout !== nothing
     task_local_storage(:__yield, parseview(data, partial = true, context = context))
@@ -373,13 +412,13 @@ end
 Renders the template file as an HTML view.
 """
 function render(viewfile::Genie.Renderer.FilePath; layout::Union{Nothing,Genie.Renderer.FilePath} = nothing, context::Module = @__MODULE__, vars...) :: Function
-  Genie.Renderer.registervars(vars...)
+  Genie.Renderer.registervars(; context = context, vars...)
 
   if layout !== nothing
-    task_local_storage(:__yield, get_template(string(viewfile), partial = true, context = context))
-    get_template(string(layout), partial = false, context = context)
+    task_local_storage(:__yield, get_template(string(viewfile); partial = true, context = context, vars...))
+    get_template(string(layout); partial = false, context = context, vars...)
   else
-    get_template(string(viewfile), partial = false, context = context)
+    get_template(string(viewfile); partial = false, context = context, vars...)
   end
 end
 
@@ -390,11 +429,18 @@ end
 
 """
 function parsehtml(input::String; partial::Bool = true) :: String
-  parsehtml(HTMLParser.parsehtml(replace(input, NBSP_REPLACEMENT), preserve_whitespace = false).root, 0, partial = partial)
+  content = replace(input, NBSP_REPLACEMENT)
+  isempty(content) && return ""
+
+  # let's get rid of the annoying xml parser warnings
+  Logging.with_logger(Logging.SimpleLogger(stdout, Logging.Error)) do
+    parsehtml(HTMLParser.parsehtml(content).root, partial = partial)
+  end
 end
 
 
-function Genie.Renderer.render(::Type{MIME"text/html"}, data::String; context::Module = @__MODULE__, layout::Union{String,Nothing} = nothing, vars...) :: Genie.Renderer.WebRenderable
+function Genie.Renderer.render(::Type{MIME"text/html"}, data::S; context::Module = @__MODULE__,
+                                layout::Union{String,Nothing} = nothing, vars...)::Genie.Renderer.WebRenderable where {S<:AbstractString}
   try
     render(data; context = context, layout = layout, vars...) |> Genie.Renderer.WebRenderable
   catch ex
@@ -414,10 +460,11 @@ function Genie.Renderer.render(::Type{MIME"text/html"}, viewfile::Genie.Renderer
 end
 
 
-function html(resource::Genie.Renderer.ResourcePath, action::Genie.Renderer.ResourcePath; layout::Genie.Renderer.ResourcePath = DEFAULT_LAYOUT_FILE,
+function html(resource::Genie.Renderer.ResourcePath, action::Genie.Renderer.ResourcePath;
+                layout::Union{Genie.Renderer.ResourcePath,Nothing} = DEFAULT_LAYOUT_FILE,
                 context::Module = @__MODULE__, status::Int = 200, headers::Genie.Renderer.HTTPHeaders = Genie.Renderer.HTTPHeaders(), vars...) :: Genie.Renderer.HTTP.Response
   html(Genie.Renderer.Path(joinpath(Genie.config.path_resources, string(resource), Renderer.VIEWS_FOLDER, string(action)));
-        layout = Genie.Renderer.Path(joinpath(Genie.config.path_app, LAYOUTS_FOLDER, string(layout))),
+        layout = (layout === nothing ? nothing : Genie.Renderer.Path(joinpath(Genie.config.path_app, LAYOUTS_FOLDER, string(layout)))),
         context = context, status = status, headers = headers, vars...)
 end
 
@@ -436,7 +483,7 @@ Parses the `data` input as HTML, returning a HTML HTTP Response.
 
 # Example
 ```jldoctest
-julia> html("<h1>Welcome \$(@vars(:name))</h1>", layout = "<div><% @yield %></div>", name = "Adrian")
+julia> html("<h1>Welcome \$(vars(:name))</h1>", layout = "<div><% @yield %></div>", name = "Adrian")
 HTTP.Messages.Response:
 "
 HTTP/1.1 200 OK
@@ -447,14 +494,30 @@ Content-Type: text/html; charset=utf-8
 ```
 """
 function html(data::String; context::Module = @__MODULE__, status::Int = 200, headers::Genie.Renderer.HTTPHeaders = Genie.Renderer.HTTPHeaders(),
-                            layout::Union{String,Nothing,Genie.Renderer.FilePath} = nothing, forceparse::Bool = false, vars...) :: Genie.Renderer.HTTP.Response
+              layout::Union{String,Nothing,Genie.Renderer.FilePath} = nothing, forceparse::Bool = false, noparse::Bool = false, vars...) :: Genie.Renderer.HTTP.Response
   isa(layout, Genie.Renderer.FilePath) && (layout = read(layout, String))
 
-  if occursin(raw"$", data) || occursin("<%", data) || layout !== nothing || forceparse
-    Genie.Renderer.WebRenderable(Genie.Renderer.render(MIME"text/html", data; context = context, layout = layout, vars...), status, headers) |> Genie.Renderer.respond
+  if (occursin(raw"$", data) || occursin("<%", data) || layout !== nothing || forceparse) && ! noparse
+    html(HTMLString(data); context = context, status = status, headers = headers, layout = layout, vars...)
   else
-    Genie.Renderer.WebRenderable(body = data, status = status, headers = headers) |> Genie.Renderer.respond
+    html(ParsedHTMLString(data); context, status, headers, layout, vars...)
   end
+end
+
+function html(data::HTMLString; context::Module = @__MODULE__, status::Int = 200, headers::Genie.Renderer.HTTPHeaders = Genie.Renderer.HTTPHeaders(),
+              layout::Union{String,Nothing,Genie.Renderer.FilePath} = nothing, forceparse::Bool = false, noparse::Bool = false, vars...) :: Genie.Renderer.HTTP.Response
+  Genie.Renderer.WebRenderable(Genie.Renderer.render(MIME"text/html", data; context = context, layout = layout, vars...), status, headers) |> Genie.Renderer.respond
+end
+
+function html(data::ParsedHTMLString; status::Int = 200,
+              headers::Genie.Renderer.HTTPHeaders = Genie.Renderer.HTTPHeaders(), vars...) :: Genie.Renderer.HTTP.Response
+  Genie.Renderer.WebRenderable(body = data.data, status = status, headers = headers) |> Genie.Renderer.respond
+end
+
+function html!(data::Union{S,Vector{S}}; status::Int = 200,
+                headers::Genie.Renderer.HTTPHeaders = Genie.Renderer.HTTPHeaders(),
+                vars...)::Genie.Renderer.HTTP.Response where {S<:AbstractString}
+  html(ParsedHTMLString(join(data)); headers, vars...)
 end
 
 
@@ -464,7 +527,7 @@ end
 Markdown view rendering
 """
 function html(md::Markdown.MD; context::Module = @__MODULE__, status::Int = 200, headers::Genie.Renderer.HTTPHeaders = Genie.Renderer.HTTPHeaders(), layout::Union{String,Nothing} = nothing, forceparse::Bool = false, vars...) :: Genie.Renderer.HTTP.Response
-  data = eval_markdown(string(md)) |> Markdown.parse |> Markdown.html
+  data = MdHtml.eval_markdown(string(md)) |> Markdown.parse |> Markdown.html
   for kv in vars
     data = replace(data, ":" * string(kv[1]) => "\$" * string(kv[1]))
   end
@@ -509,91 +572,196 @@ function safe_attr(attr) :: String
 end
 
 
+function matchbrackets(v::String, ob = "(", cb = ")")
+  positions = Int[]
+  substrings = Any[]
+  counter = 1
+
+  for x in v
+    if x == ob
+      push!(positions, counter)
+    end
+
+    if x == cb
+      px = try
+        pop!(positions)
+      catch
+        error("Parse error: possibly unmatched bracket in `$v`")
+      end
+
+      push!(substrings, px:counter)
+    end
+
+    counter += 1
+  end
+
+  substrings |> sort!
+end
+
+
+function matchjuliaexpr(v::String, ob = "(", cb = ")", dollar = true)
+  substrings = matchbrackets(v, ob, cb)
+  matches = String[]
+
+  for i in substrings
+    pii = prevind(v, i.start)
+    if ! dollar || (dollar && pii > 0 && v[pii] == '$')
+      push!(matches, v[i.start:i.stop])
+    end
+  end
+
+  matches
+end
+
+
+function parse_attributes!(elem_attributes, io::IOBuffer) :: IOBuffer
+  attributes = IOBuffer()
+  attributes_keys = String[]
+  attributes_values = String[]
+
+  for (k,v) in elem_attributes
+    # x = v
+    k = string(k) |> lowercase
+    if isa(v, AbstractString) && occursin("\"", v)
+      # we need to escape double quotes but only if it's not embedded Julia code
+      mx = vcat(matchjuliaexpr(v, '(', ')', true), matchjuliaexpr(v, "<%", "%>", false))
+      if ! isempty(mx)
+        index = 1
+        for value in mx
+          label = "$(EMBEDDED_JULIA_PLACEHOLDER)_$(index)"
+          v = replace(v, value => label)
+          index += 1
+        end
+
+        if occursin("\"", v) # do we still need to escape double quotes?
+          v = replace(v, "\"" => "\\\"") # we need to escape " as this will be inside julia strings
+        end
+
+        # now we need to put back the embedded Julia
+        index = 1
+        for value in mx
+          label = "$(EMBEDDED_JULIA_PLACEHOLDER)_$(index)"
+          v = replace(v, label => value)
+          index += 1
+        end
+      elseif occursin("\"", v) # do we still need to escape double quotes?
+        v = replace(string(v), "\"" => "'") #
+      end
+    end
+
+    if startswith(k, raw"$") # do not process embedded julia code
+      print(attributes, k[2:end], ", ") # strip the $, this is rendered directly in Julia code
+      continue
+    end
+
+    if occursin("-", k) ||
+        occursin(":", k) ||
+        occursin("@", k) ||
+        occursin(".", k) ||
+        occursin("for", k)
+
+      push!(attributes_keys, Symbol(k) |> repr)
+
+      v = string(v) |> repr
+      occursin(raw"\$", v) && (v = replace(v, raw"\$"=>raw"$"))
+      push!(attributes_values, v)
+    else
+      print(attributes, """$k="$v" """, ", ")
+    end
+  end
+
+  attributes_string = String(take!(attributes))
+  endswith(attributes_string, ", ") && (attributes_string = attributes_string[1:end-2])
+
+  print(io, attributes_string)
+  ! isempty(attributes_string) && ! isempty(attributes_keys) && print(io, ", ")
+  ! isempty(attributes_keys) &&
+    print(io, "; NamedTuple{($(join(attributes_keys, ", "))$(length(attributes_keys) == 1 ? ", " : ""))}(($(join(attributes_values, ", "))$(length(attributes_keys) == 1 ? ", " : "")))...")
+
+  io
+end
+
+
 """
-    parsehtml(elem, output, depth; partial = true) :: String
+    parsehtml(elem, output; partial = true) :: String
 
 Parses a HTML tree structure into a `string` of Julia code.
 """
-function parsehtml(elem::HTMLParser.HTMLElement, depth::Int = 0; partial::Bool = true) :: String
+function parsehtml(elem::HTMLParser.Node; partial::Bool = true, indent = 0) :: String
   io = IOBuffer()
 
-  tag_name = denormalize_element(string(HTMLParser.tag(elem)))
+  tag_name = denormalize_element(string(elem.name))
 
   invalid_tag = partial && (tag_name == "html" || tag_name == "head" || tag_name == "body")
 
-  if tag_name == "script" && in("type", collect(keys(HTMLParser.attrs(elem))))
-    if HTMLParser.attrs(elem)["type"] == "julia/eval"
-      isempty(HTMLParser.children(elem)) || print(io, repeat("\t", depth), string(HTMLParser.children(elem)[1].text), "\n")
+  if tag_name == "script" && haskey(elem, "type") && elem["type"] == "julia/eval"
+    if ! isempty(HTMLParser.nodes(elem))
+      print(io, string(HTMLParser.nodes(elem)[1] |> HTMLParser.nodecontent), "\n")
     end
-
   else
     mdl = isdefined(@__MODULE__, Symbol(tag_name)) ? string(@__MODULE__, ".") : ""
-    print(io, repeat("\t", depth), ( ! invalid_tag ? "$mdl$(tag_name)(" : "Html.skip_element(" ))
 
-    attributes = IOBuffer()
-    attributes_keys = String[]
-    attributes_values = String[]
+    invalid_tag || print(io, "$mdl$(tag_name)(" )
 
-    for (k,v) in HTMLParser.attrs(elem)
-      x = v
-      k = string(k) |> lowercase
+    if (elem.type == HTMLParser.ELEMENT_NODE)
+      attrs_dict = Dict{String,Any}()
+      for a in HTMLParser.attributes(elem)
+        try
+          attrs_dict[a.name] = elem[a.name]
+        catch ex
+          parts = split(string(a), '=')
 
-      if startswith(k, raw"$") # do not process embedded julia code
-        print(attributes, k[2:end], ", ") # strip the $, this is rendered directly in Julia code
-        continue
+          if length(parts) == 2
+            val = strip(parts[2])
+            (startswith(val, '"') || startswith(val, "'")) && (val = val[2:end])
+            (endswith(val, '"') || endswith(val, "'")) && (val = val[1:end-1])
+            attrs_dict[strip(parts[1])] = val
+          elseif length(parts) == 1
+            attrs_dict[strip(parts[1])] = strip(parts[1])
+          else
+            string(a)
+          end
+        end
       end
 
-      if occursin("-", k) ||
-          occursin(":", k) ||
-          occursin("@", k) ||
-          occursin(".", k) ||
-          occursin("for", k)
+      ! invalid_tag && Genie.config.format_html_output && (attrs_dict["htmlsourceindent"] = indent)
 
-        push!(attributes_keys, Symbol(k) |> repr)
-
-        v = string(v) |> repr
-        occursin(raw"\$", v) && (v = replace(v, raw"\$"=>raw"$"))
-        push!(attributes_values, v)
-      else
-        print(attributes, """$k="$v" """, ", ")
-      end
+      io = parse_attributes!(attrs_dict, io)
     end
 
-    attributes_string = String(take!(attributes))
-    endswith(attributes_string, ", ") && (attributes_string = attributes_string[1:end-2])
-
-    print(io, attributes_string)
-    ! isempty(attributes_string) && ! isempty(attributes_keys) && print(io, ", ")
-    ! isempty(attributes_keys) &&
-      print(io, "; NamedTuple{($(join(attributes_keys, ", "))$(length(attributes_keys) == 1 ? ", " : ""))}(($(join(attributes_values, ", "))$(length(attributes_keys) == 1 ? ", " : "")))...")
-    print(io, ")")
+    invalid_tag || print(io, " )")
 
     inner = ""
-    if ! isempty(HTMLParser.children(elem))
-      children_count = size(HTMLParser.children(elem))[1]
+    if ! isempty(HTMLParser.nodes(elem))
+      children_count = HTMLParser.countnodes(elem)
 
-      print(io, " do;[\n")
+      invalid_tag ? print(io, "") : print(io, " do;[\n")
 
       idx = 0
-      for child in HTMLParser.children(elem)
+      indent += 1
+      for child in HTMLParser.nodes(elem)
         idx += 1
-        inner *= isa(child, HTMLParser.HTMLText) ? parsehtml(child, depth + 1) : parsehtml(child, depth + 1, partial = partial)
+        inner *= (child.type == HTMLParser.TEXT_NODE || child.type == HTMLParser.CDATA_SECTION_NODE ||
+                    child.type == HTMLParser.COMMENT_NODE) ?
+                  parsenode(child) :
+                  parsehtml(child; partial = partial, indent = indent)
         if idx < children_count
-          if  ( isa(child, HTMLParser.HTMLText) ) ||
-              ( isa(child, HTMLParser.HTMLElement) &&
-              ( ! in("type", collect(keys(HTMLParser.attrs(child)))) ||
-                ( in("type", collect(keys(HTMLParser.attrs(child)))) && (HTMLParser.attrs(child)["type"] != "julia/eval") ) ) )
-              isempty(inner) || (inner = string(repeat("\t", depth), inner, "\n"))
+          if  ( child.type == HTMLParser.TEXT_NODE || child.type == HTMLParser.CDATA_SECTION_NODE ||
+                child.type == HTMLParser.COMMENT_NODE) ||
+              ( child.type == HTMLParser.ELEMENT_NODE &&
+              ( ! haskey(elem, "type") ||
+                ( haskey(elem, "type") && (elem["type"] == "julia/eval") ) ) )
+              isempty(inner) || (inner = string(inner, "\n"))
           end
         end
       end
 
       if ! isempty(inner)
         endswith(inner, "\n\n") && (inner = inner[1:end-2])
-        print(io, inner, repeat("\t", depth))
+        print(io, inner, " ; ")
       end
 
-      print(io, "]end\n")
+      invalid_tag ? print(io, "") : print(io, " ]end\n")
     end
 
   end
@@ -602,11 +770,13 @@ function parsehtml(elem::HTMLParser.HTMLElement, depth::Int = 0; partial::Bool =
 end
 
 
-function parsehtml(elem::HTMLParser.HTMLText, depth::Int = 0; partial::Bool = true) :: String
-  content = elem.text
+function parsenode(elem::HTMLParser.Node; partial::Bool = true) :: String
+  content = elem |> HTMLParser.nodecontent
   endswith(content, "\"") && (content *= Char(0x0))
   content = replace(content, NBSP_REPLACEMENT[2]=>NBSP_REPLACEMENT[1])
-  string(repeat("\t", depth), "\"\"\"$(content)\"\"\"")
+  isempty(strip(content)) && return ""
+  elem.type == HTMLParser.COMMENT_NODE && return string("\"\"\"<!-- $(content) -->\"\"\"")
+  string("\"\"\"$(content)\"\"\"")
 end
 
 
@@ -615,8 +785,8 @@ end
 
 Converts a HTML document to Julia code.
 """
-function html_to_julia(file_path::String; partial = true) :: String
-  to_julia(file_path, parse_template, partial = partial)
+function html_to_julia(file_path::String; partial = true, extension = TEMPLATE_EXT) :: String
+  to_julia(file_path, parse_template; partial = partial, extension = extension)
 end
 
 
@@ -625,8 +795,8 @@ end
 
 Converts string view data to Julia code
 """
-function string_to_julia(content::String; partial = true, f_name::Union{Symbol,Nothing} = nothing, prepend::String = "\n", vars_included::Bool = false) :: String
-  to_julia(content, parse_string, partial = partial, f_name = f_name, prepend = prepend, vars_included = vars_included)
+function string_to_julia(content::S; partial = true, f_name::Union{Symbol,Nothing} = nothing, prepend::String = "\n")::String where {S<:AbstractString}
+  to_julia(content, parse_string, partial = partial, f_name = f_name, prepend = prepend)
 end
 
 
@@ -635,15 +805,26 @@ end
 
 Converts an input file to Julia code
 """
-function to_julia(input::String, f::Function; partial = true, f_name::Union{Symbol,Nothing} = nothing, prepend::String = "\n", vars_included::Bool = false) :: String
+  function to_julia(input::S, f::Union{Function,Nothing};
+                  partial = true, f_name::Union{Symbol,Nothing} = nothing,
+                  prepend::String = "\n", extension = TEMPLATE_EXT)::ParsedHTMLString where {S<:AbstractString}
   f_name = (f_name === nothing) ? Genie.Renderer.function_name(string(input, partial)) : f_name
 
-  string("function $(f_name)() \n",
-          (vars_included ? "" : Genie.Renderer.injectvars()),
+  string("function $(f_name)(; $(Genie.Renderer.injectkwvars())) \n",
+          "
+          [
+          ",
+
           prepend,
-          (partial ? "" : "\nGenie.Renderer.Html.doctype() * \n"),
-          f(input, partial = partial),
-          "\nend \n")
+
+          (partial ? "" : "\nGenie.Renderer.Html.doctype() \n"),
+
+          f !== nothing ? f(input; partial = partial, extension = extension) : input,
+
+          "
+          ]
+          end
+          ")
 end
 
 
@@ -652,30 +833,32 @@ end
 
 Renders (includes) a view partial within a larger view or layout file.
 """
-function partial(path::String; context::Module = @__MODULE__, vars...) :: String
-  for (k,v) in vars
-    try
-      task_local_storage(:__vars)[k] = v
-    catch
-      Genie.Renderer.init_task_local_storage()
-      task_local_storage(:__vars)[k] = v
-    end
+function partial(path::String; context::Module = @__MODULE__, kwvars...) :: String
+  for (k,v) in kwvars
+    vars()[k] = v
   end
 
   template(path, partial = true, context = context)
 end
 
+function partial(path::Genie.Renderer.FilePath; context::Module = @__MODULE__, kwvars...)
+  partial(string(path); context = context, kwvars...)
+end
 
 """
-    template(path::String; partial::Bool = true, context::Module = @__MODULE__) :: String
+    template(path::String; partial::Bool = true, context::Module = @__MODULE__, vars...) :: String
 
 Renders a template file.
 """
-function template(path::String; partial::Bool = true, context::Module = @__MODULE__) :: String
+function template(path::String; partial::Bool = true, context::Module = @__MODULE__, vars...) :: String
   try
-    get_template(path, partial = partial, context = context)()
-  catch
-    Base.invokelatest(get_template(path, partial = partial, context = context))::String
+    get_template(path; partial = partial, context = context, vars...)() |> join
+  catch ex
+    if isa(ex, MethodError) && (string(ex.f) == "get_template" || startswith(string(ex.f), "func_"))
+      Base.invokelatest(get_template(path; partial = partial, context = context, vars...)) |> join
+    else
+      rethrow(ex)
+    end
   end
 end
 
@@ -685,13 +868,23 @@ end
 
 Reads `file_path` template from disk.
 """
-function read_template_file(file_path::String) :: String
+function read_template_file(file_path::String; extension = TEMPLATE_EXT) :: String
   io = IOBuffer()
+
+  extension == HTML_FILE_EXT && print(io, """
+  \"\"\"
+  """)
+
   open(file_path) do f
-    for line in enumerate(eachline(f))
-      print(io, parsetags(line), "\n")
+    for line in eachline(f)
+      isempty(strip(line)) && continue
+      print(io, parse_embed_tags(line), "\n")
     end
   end
+
+  extension == HTML_FILE_EXT && print(io, """
+  \"\"\"
+  """)
 
   String(take!(io))
 end
@@ -702,8 +895,8 @@ end
 
 Parses a HTML file into Julia code.
 """
-function parse_template(file_path::String; partial::Bool = true) :: String
-  parse(read_template_file(file_path), partial = partial)
+function parse_template(file_path::S; partial::Bool = true, extension = TEMPLATE_EXT)::ParsedHTMLString where {S<:AbstractString}
+  parse(read_template_file(file_path; extension = extension)::String; partial = partial)
 end
 
 
@@ -712,27 +905,17 @@ end
 
 Parses a HTML string into Julia code.
 """
-function parse_string(data::String; partial::Bool = true) :: String
-  parse(parsetags(data), partial = partial)
+function parse_string(data::S; partial::Bool = true, extension = TEMPLATE_EXT)::ParsedHTMLString where {S<:AbstractString}
+  parse(parse_embed_tags(data), partial = partial)
 end
 
 
-function parse(input::String; partial::Bool = true) :: String
+function parse(input::S; partial::Bool = true)::ParsedHTMLString where {S<:AbstractString}
   parsehtml(input, partial = partial)
 end
 
 
-"""
-    parsetags(line::Tuple{Int,String}, strip_close_tag = false) :: String
-
-Parses special HTML+Julia tags.
-"""
-function parsetags(line::Tuple{Int,String}) :: String
-  parsetags(line[2])
-end
-
-
-function parsetags(code::String) :: String
+function parse_embed_tags(code::S)::String where {S<:AbstractString}
   replace(
     replace(code, "<%"=>"""<script type="julia/eval">"""),
     "%>"=>"""</script>""")
@@ -758,19 +941,11 @@ function register_elements(; context = @__MODULE__) :: Nothing
     elem in NON_EXPORTED || Core.eval(context, "export $elem" |> Meta.parse)
   end
 
-  nothing
-end
-
-
-"""
-    register_svg_slements(; context = @__MODULE__) :: Nothing
-
-Sets up HTML tags for the SVG API.
-"""
-function register_svg_slements(; context = @__MODULE__) :: Nothing
   for elem in SVG_ELEMENTS
     register_normal_element(elem)
   end
+
+  nothing
 end
 
 
@@ -794,25 +969,25 @@ Generates a Julia function representing a "normal" HTML element: that is an elem
 """
 function register_normal_element(elem::Union{Symbol,String}; context = @__MODULE__) :: Nothing
   Core.eval(context, """
-    function $elem(f::Function, args...; attrs...) :: HTMLString
+    function $elem(f::Function, args...; attrs...) :: ParsedHTMLString
       \"\"\"\$(normal_element(f, "$(string(elem))", [args...], Pair{Symbol,Any}[attrs...]))\"\"\"
     end
   """ |> Meta.parse)
 
   Core.eval(context, """
-    function $elem(children::Union{String,Vector{String}} = "", args...; attrs...) :: HTMLString
+    function $elem(children::Union{String,Vector{String}} = "", args...; attrs...) :: ParsedHTMLString
       \"\"\"\$(normal_element(children, "$(string(elem))", [args...], Pair{Symbol,Any}[attrs...]))\"\"\"
     end
   """ |> Meta.parse)
 
   Core.eval(context, """
-    function $elem(children::Any, args...; attrs...) :: HTMLString
+    function $elem(children::Any, args...; attrs...) :: ParsedHTMLString
       \"\"\"\$(normal_element(string(children), "$(string(elem))", [args...], Pair{Symbol,Any}[attrs...]))\"\"\"
     end
   """ |> Meta.parse)
 
   Core.eval(context, """
-    function $elem(children::Vector{Any}, args...; attrs...) :: HTMLString
+    function $elem(children::Vector{Any}, args...; attrs...) :: ParsedHTMLString
       \"\"\"\$(normal_element([string(c) for c in children], "$(string(elem))", [args...], Pair{Symbol,Any}[attrs...]))\"\"\"
     end
   """ |> Meta.parse)
@@ -842,39 +1017,13 @@ end
 
 
 """
-    @attr(attr)
+    for_each(f::Function, v)
 
-Returns an HTML attribute string.
-"""
-macro attr(attr)
-  "$(string(attr))"
-end
-
-
-"""
-    @foreach(f, arr)
-
-Iterates over the `arr` Array and applies function `f` for each element.
+Iterates over the `v` Vector and applies function `f` for each element.
 The results of each iteration are concatenated and the final string is returned.
-
-## Examples
-
-@foreach(@vars(:translations)) do t
-  t
-end
 """
-macro foreach(f, arr)
-  e = quote
-    isempty($(esc(arr))) && return ""
-
-    mapreduce(*, $(esc(arr))) do _s
-      $(esc(f))(_s)
-    end
-  end
-
-  quote
-    Core.eval($__module__, $e)
-  end
+function for_each(f::Function, v)
+  [f(x) for x in v] |> join
 end
 
 
@@ -884,7 +1033,7 @@ end
 Creates a view fragment by repeateadly applying a function to each element of the collection.
 """
 function collection(template::Function, collection::Vector{T})::String where {T}
-  @foreach(collection) do item
+  for_each(collection) do item
     template(item) |> string
   end
 end
@@ -946,7 +1095,7 @@ function serve_error_file(error_code::Int, error_message::String = ""; error_inf
 
       error_message = if Genie.Configuration.isdev()
                       """$("#" ^ 25) ERROR STACKTRACE $("#" ^ 25)\n$error_message                                     $("\n" ^ 3)""" *
-                      """$("#" ^ 25)  REQUEST PARAMS  $("#" ^ 25)\n$(Millboard.table(Genie.Router.@params))                        $("\n" ^ 3)""" *
+                      """$("#" ^ 25)  REQUEST PARAMS  $("#" ^ 25)\n$(Millboard.table(Genie.Router.params()))                        $("\n" ^ 3)""" *
                       """$("#" ^ 25)     ROUTES       $("#" ^ 25)\n$(Millboard.table(Genie.Router.named_routes() |> Dict))  $("\n" ^ 3)""" *
                       """$("#" ^ 25)    JULIA ENV     $("#" ^ 25)\n$ENV                                               $("\n" ^ 1)"""
       else
@@ -979,9 +1128,7 @@ end
 Outputs the rendering of the view within the template.
 """
 macro yield()
-  quote
-    view!()
-  end
+  :(view!()() |> join)
 end
 macro yield(value)
   :(view!($value))
@@ -989,11 +1136,7 @@ end
 
 
 function view!()
-  try
-    task_local_storage(:__yield)
-  catch
-    task_local_storage(:__yield, "")
-  end
+  haskey(task_local_storage(), :__yield) ? task_local_storage(:__yield) : task_local_storage(:__yield, String[])
 end
 
 function view!(value)

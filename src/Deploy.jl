@@ -5,7 +5,7 @@ function run(command::Cmd)
   try Base.run(command)
 
   catch ex
-    if isa(ex, IOError)
+    if isa(ex, Base.IOError)
       @error "Can not find $(command.exec[1]). Please make sure that $(command.exec[1]) is installed and accessible."
     end
 
@@ -58,8 +58,12 @@ end
 
 Builds the Docker image based on the `Dockerfile`
 """
-function build(path::String = "."; appname::String = "genie")
-  `$DOCKER build -t "$appname" $path` |> Genie.Deploy.run
+function build(path::String = "."; appname::String = "genie", nocache::Bool = true)
+  if nocache
+    `$DOCKER build --no-cache -t "$appname" $path`
+  else
+    `$DOCKER build -t "$appname" $path`
+  end |> Genie.Deploy.run
 
   "Docker container successfully built" |> println
 end
@@ -83,7 +87,7 @@ Runs the Docker container named `containername`, binding `hostport` and `contain
 - `it::Bool`: runs interactively
 """
 function run(; containername::String = "genieapp", hostport::Int = 80, containerport::Int = 8000, appdir::String = "/home/genie/app",
-                mountapp::Bool = false, image::String = "genie", command::String = "bin/server", rm::Bool = true, it::Bool = true,
+                mountapp::Bool = false, image::String = "genie", command::String = "", rm::Bool = true, it::Bool = true,
                 websockets_hostport::Int = hostport, websockets_containerport::Int = containerport)
   options = []
 
@@ -127,13 +131,22 @@ import Genie
 const HEROKU = @static Sys.iswindows() ? `heroku.cmd` : `heroku`
 
 """
+    apps()
+
+Returns list of apps available on Heroku account.
+"""
+function apps()
+  `$HEROKU apps` |> Genie.Deploy.run
+end
+
+"""
     createapp(appname::String; region::String = "us")
 
 Runs the `heroku create` command to create a new app in the indicated region.
 See https://devcenter.heroku.com/articles/heroku-cli-commands#heroku-apps-create-app
 """
 function createapp(appname::String; region::String = "us")
-  `$HEROKU create $(lowercase(appname)) --region $region` |> Genie.Deploy.run
+  `$HEROKU create $(appname) --region $region` |> Genie.Deploy.run
 end
 
 

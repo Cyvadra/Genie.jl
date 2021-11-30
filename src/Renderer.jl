@@ -2,7 +2,7 @@ module Renderer
 
 export respond, redirect, render
 
-import HTTP, Markdown, Logging, FilePathsBase, SHA
+import EzXML, FilePathsBase, HTTP, JuliaFormatter, Logging, Markdown, SHA
 import Genie
 
 const DEFAULT_CHARSET = "charset=utf-8"
@@ -56,7 +56,7 @@ macro path_str(s)
 end
 
 export FilePath, filepath, Path, @path_str
-export @vars
+export vars
 export WebRenderable
 
 init_task_local_storage() = (haskey(task_local_storage(), :__vars) || task_local_storage(:__vars, Dict{Symbol,Any}()))
@@ -155,11 +155,7 @@ end
 
 
 function WebRenderable(f::Function, args...)
-  fr::String = try
-    f()::String
-  catch
-    Base.invokelatest(f)::String
-  end
+  fr::String = Base.invokelatest(f) |> join
 
   WebRenderable(fr, args...)
 end
@@ -246,46 +242,31 @@ end
 
 
 """
-    registervars(vars...) :: Nothing
+    registervars(vs...) :: Nothing
 
 Loads the rendering vars into the task's scope
 """
-function registervars(vars...) :: Nothing
-  init_task_local_storage()
-  task_local_storage(:__vars, merge(task_local_storage(:__vars), Dict{Symbol,Any}(vars)))
+function registervars(; context::Module = @__MODULE__, vs...) :: Nothing
+  task_local_storage(:__vars, merge(vars(), Dict{Symbol,Any}(vs), Dict{Symbol,Any}(:context => context)))
 
   nothing
 end
 
 
 """
-    injectvars() :: String
+    injectkwvars() :: String
 
 Sets up variables passed into the view, making them available in the
-generated view function.
+generated view function as kw arguments for the rendering function.
 """
-function injectvars() :: String
-  output = ""
-  for kv in task_local_storage(:__vars)
-    output *= "try \n"
-    output *= "global $(kv[1]) = Genie.Renderer.@vars($(repr(kv[1]))) \n"
-    output *= "
-catch ex
-  @error ex
-end
-"
+function injectkwvars() :: String
+  output = String[]
+
+  for kv in vars()
+    push!(output, "$(kv[1]) = Genie.Renderer.vars($(repr(kv[1])))")
   end
 
-  output
-end
-
-
-function injectvars(context::Module) :: Nothing
-  for kv in task_local_storage(:__vars)
-    Core.eval(context, Meta.parse("global $(kv[1]) = Renderer.@vars($(repr(kv[1])))"))
-  end
-
-  nothing
+  join(output, ',')
 end
 
 
@@ -295,7 +276,6 @@ end
 Extracts path and extension info about a file
 """
 function view_file_info(path::String, supported_extensions::Vector{String}) :: Tuple{String,String}
-
   _path, _extension = "", ""
 
   if isfile(path)
@@ -310,6 +290,13 @@ function view_file_info(path::String, supported_extensions::Vector{String}) :: T
     end
   end
 
+  if ! isfile(_path)
+    error_message = length(supported_extensions) == 1 ?
+                      """Template file "$path$(supported_extensions[1])" does not exist""" :
+                      """Template file "$path" with extensions $supported_extensions does not exist"""
+    error(error_message)
+  end
+
   return _path, _extension
 end
 
@@ -321,7 +308,7 @@ Collects the names of the view vars in order to create a unique hash/salt to ide
 compiled views with different vars.
 """
 function vars_signature() :: String
-  task_local_storage(:__vars) |> keys |> collect |> sort |> string
+  vars() |> keys |> collect |> sort |> string
 end
 
 
@@ -366,14 +353,21 @@ end
 
 Persists compiled Julia view data to file and returns the path
 """
-function build_module(content::String, path::String, mod_name::String) :: String
+function build_module(content::S, path::T, mod_name::U; output_path::Bool = true)::String where {S<:AbstractString,T<:AbstractString,U<:AbstractString}
   module_path = joinpath(Genie.config.path_build, BUILD_NAME, mod_name)
 
   isdir(dirname(module_path)) || mkpath(dirname(module_path))
 
   open(module_path, "w") do io
-    write(io, "# $path \n\n")
-    write(io, content)
+    output_path && write(io, "# $path \n\n")
+    write(io,
+      Genie.config.format_julia_builds ?
+      (try
+        JuliaFormatter.format_text(content)
+      catch ex
+        @error ex
+        content
+      end) : content)
   end
 
   module_path
@@ -417,38 +411,35 @@ end
 
 
 """
-    @vars
+    function vars
 
-Utility macro for accessing view vars
+Utility for accessing view vars
 """
-macro vars()
-  :(task_local_storage(:__vars))
+function vars()
+  haskey(task_local_storage(), :__vars) ? task_local_storage(:__vars) : init_task_local_storage()
 end
 
 
 """
-    @vars(key)
+    function vars(key)
 
-Utility macro for accessing view vars stored under `key`
+Utility for accessing view vars stored under `key`
 """
-macro vars(key)
-  :(task_local_storage(:__vars)[$key])
+function vars(key)
+  vars()[key]
 end
 
 
 """
-    @vars(key, value)
+    function vars(key, value)
 
-Utility macro for setting a new view var, as `key` => `value`
+Utility for setting a new view var, as `key` => `value`
 """
-macro vars(key, value)
-  quote
-    try
-      task_local_storage(:__vars)[$key] = $(esc(value))
-    catch
-      init_task_local_storage()
-      task_local_storage(:__vars)[$key] = $(esc(value))
-    end
+function vars(key, value)
+  if haskey(task_local_storage(), :__vars)
+    vars()[key] = value
+  else
+    task_local_storage(:__vars, Dict(key => value))
   end
 end
 
@@ -531,7 +522,6 @@ function negotiate_content(req::HTTP.Request, res::HTTP.Response, params::Dict{S
   return req, res, params
 end
 
-
 push!(Genie.Router.content_negotiation_hooks, negotiate_content)
 
 
@@ -539,5 +529,6 @@ include("renderers/Html.jl")
 include("renderers/Json.jl")
 include("renderers/Js.jl")
 
-
 end
+
+const Renderers = Renderer

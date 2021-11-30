@@ -3,7 +3,7 @@ Functionality for handling the defautl conent of the various Genie files (migrat
 """
 module FileTemplates
 
-import Genie.Inflector
+import Inflector
 
 
 """
@@ -71,12 +71,12 @@ function appmodule(path::String)
   using Genie, Logging, LoggingExtras
 
   function main()
-    Base.eval(Main, :(const UserApp = $appname))
+    Core.eval(Main, :(const UserApp = \$(@__MODULE__)))
 
     Genie.genie(; context = @__MODULE__)
 
-    Base.eval(Main, :(const Genie = $appname.Genie))
-    Base.eval(Main, :(using Genie))
+    Core.eval(Main, :(const Genie = UserApp.Genie))
+    Core.eval(Main, :(using Genie))
   end
 
   end
@@ -94,47 +94,69 @@ end
 Generates dockerfile for the Genie app.
 """
 function dockerfile(; user::String = "genie", supervisor::Bool = false, nginx::Bool = false, env::String = "dev",
-                      filename::String = "Dockerfile", port::Int = 8000, dockerport::Int = 80, host::String = "0.0.0.0",
-                      websockets_port::Int = port, websockets_dockerport::Int = dockerport, earlybind::Bool = true)
+                      filename::String = "Dockerfile", port::Int = Genie.config.server_port, dockerport::Int = 80,
+                      host::String = "0.0.0.0", websockets_port::Int = port,
+                      websockets_dockerport::Int = dockerport, earlybind::Bool = true)
   appdir = "/home/$user/app"
 
+  string(
   """
+  # pull latest julia image
   FROM julia:latest
 
-  # user
+  # create dedicated user
   RUN useradd --create-home --shell /bin/bash $user
 
-  # app
+  # set up the app
   RUN mkdir $appdir
   COPY . $appdir
   WORKDIR $appdir
 
+  # configure permissions
   RUN chown $user:$user -R *
 
   RUN chmod +x bin/repl
   RUN chmod +x bin/server
   RUN chmod +x bin/runtask
 
+  # switch user
   USER $user
 
+  # instantiate Julia packages
   RUN julia -e "using Pkg; Pkg.activate(\\".\\"); Pkg.instantiate(); Pkg.precompile(); "
 
   # ports
   EXPOSE $port
   EXPOSE $dockerport
+  """,
+
+  (websockets_port != port ?
+  """
 
   # websockets ports
   EXPOSE $websockets_port
   EXPOSE $websockets_dockerport
+  """ : ""),
 
+  """
+
+  # set up app environment
   ENV JULIA_DEPOT_PATH "/home/$user/.julia"
   ENV GENIE_ENV "$env"
   ENV HOST "$host"
   ENV PORT "$port"
-  ENV PORT "$earlybind"
+  ENV WSPORT "$websockets_port"
+  ENV EARLYBIND "$earlybind"
+  """,
 
-  CMD ["bin/server"]
   """
+
+  # run app
+  CMD ["bin/server"]
+
+  # or maybe include a Julia file
+  # CMD julia -e 'using Pkg; Pkg.activate("."); include("IrisClustering.jl"); '
+  """)
 end
 
 end

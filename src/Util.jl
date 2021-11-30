@@ -39,7 +39,7 @@ function walk_dir(dir, paths = String[]; only_extensions = ["jl"], only_files = 
 
     if isdir(full_path)
       (! only_files || only_dirs) && push!(paths, full_path)
-      walk_dir(full_path, paths)
+      walk_dir(full_path, paths; only_extensions = only_extensions)
     else
       only_dirs && continue
 
@@ -52,12 +52,24 @@ end
 
 
 """
+    time_to_unixtimestamp(t::Float64 = time()) :: Int
+
+Converts a time value to the corresponding unix timestamp.
 """
-function time_to_unixtimestamp(t::Float64)
+function time_to_unixtimestamp(t::Float64 = time()) :: Int
   floor(t) |> Int
 end
-function time_to_unixtimestamp()
-  time_to_unixtimestamp(time())
+
+
+"""
+    filterwhitespace(s::String, allowed::Vector{Char} = Char[]) :: String
+
+Removes whitespaces from `s`, whith the exception of the characters in `allowed`.
+"""
+function filterwhitespace(s::S, allowed::Vector{Char} = Char[])::String where {S<:AbstractString}
+  filter(x -> (x in allowed) || ! isspace(x), string(s))
 end
+
+const fws = filterwhitespace
 
 end

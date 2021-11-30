@@ -33,11 +33,8 @@ function newresource(resource_name::Union{String,Symbol}; path::String = ".", pl
   Generator.newresource(string(resource_name), path = path, pluralize = pluralize)
 
   try
-    pluralize || error("SearchLight resources need to be pluralized")
-    Core.eval(context, :(SearchLight.Generator.newresource(uppercasefirst($resource_name)))) # SearchLight resources don't work on singular
-  catch ex
-    @error ex
-    @warn "Skipping SearchLight"
+    Core.eval(context, :(SearchLight.Generator.newresource(uppercasefirst($resource_name))))
+  catch
   end
 
   load_resources()
@@ -148,10 +145,10 @@ function load_configurations(root_dir::String = Genie.config.path_config; contex
         Call Genie.Generator.migrate_secrets_file() to resolve this warning.
       "
     end
-        
+
     Genie.secret_token() # emits a warning and re-generates the token if secrets_path is not valid
   end
-    
+
   nothing
 end
 
@@ -216,25 +213,28 @@ Usually, this token is defined through `Genie.secret_token!` in the `config/secr
 Here, a temporary one is generated for the current session if no other token is defined and
 `generate_if_missing` is true.
 """
-function secret_token(generate_if_missing::Bool=true; context::Union{Module,Nothing}=nothing)
-  if context != nothing
-    @warn "secret_token not context-dependent any more; the context argument is deprecated"
-  end
-  if isempty(SECRET_TOKEN[]) && generate_if_missing
-    @warn "
-          No secret token is defined through `Genie.secret_token!(\"token\")`. Such a token
-          is needed to hash and to encrypt/decrypt sensitive data in Genie, including cookie
-          and session data.
+function secret_token(generate_if_missing::Bool = true; context::Union{Module,Nothing} = nothing)
+  if isempty(SECRET_TOKEN[])
+    isfile(joinpath(Genie.config.path_config, Genie.SECRETS_FILE_NAME)) &&
+      @eval include(joinpath(Genie.config.path_config, Genie.SECRETS_FILE_NAME))
 
-          If your app relies on cookies or sessions make sure you generate a valid token,
-          otherwise the encrypted data will become unreadable between app restarts.
+    if isempty(SECRET_TOKEN[]) && generate_if_missing
+      @warn "
+            No secret token is defined through `Genie.secret_token!(\"token\")`. Such a token
+            is needed to hash and to encrypt/decrypt sensitive data in Genie, including cookie
+            and session data.
 
-          You can resolve this issue by generating a valid `config/secrets.jl` file with a
-          random token, calling `Genie.Generator.write_secrets_file()`.
-          "
-    secret_token!()
+            If your app relies on cookies or sessions make sure you generate a valid token,
+            otherwise the encrypted data will become unreadable between app restarts.
+
+            You can resolve this issue by generating a valid `config/secrets.jl` file with a
+            random token, calling `Genie.Generator.write_secrets_file()`.
+            "
+      secret_token!()
+    end
   end
-  return SECRET_TOKEN[]
+
+  SECRET_TOKEN[]
 end
 
 """
@@ -242,9 +242,10 @@ end
 
 Define the secret token used in the app for encryption and salting.
 """
-function secret_token!(value::AbstractString=Generator.secret_token())
+function secret_token!(value::AbstractString = Generator.secret_token())
   SECRET_TOKEN[] = value
-  return value
+
+  value
 end
 
 
@@ -278,8 +279,6 @@ function load(; context::Union{Module,Nothing} = nothing) :: Nothing
   t = Terminals.TTYTerminal("", stdin, stdout, stderr)
 
   load_configurations(context = context)
-
-  global ASSET_FINGERPRINT = App.ASSET_FINGERPRINT
 
   replprint("initializers", t, clearline = 0, prefix = "Loading ")
   load_initializers(context = context)

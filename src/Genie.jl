@@ -7,8 +7,12 @@ import Revise
 
 push!(LOAD_PATH, @__DIR__)
 
+import Inflector
+
 include("Configuration.jl")
-const config = Configuration.Settings(app_env = ENV["GENIE_ENV"])
+using .Configuration
+
+const config = Configuration.Settings()
 
 include("constants.jl")
 
@@ -23,7 +27,6 @@ include("HTTPUtils.jl")
 include("Exceptions.jl")
 include("App.jl")
 include("genie_module.jl")
-include("Inflector.jl")
 include("Util.jl")
 include("FileTemplates.jl")
 include("Toolbox.jl")
@@ -53,11 +56,13 @@ config.cache_storage == :File && include("cache_adapters/FileCache.jl")
 
 include("Sessions.jl")
 
-export serve, up, down, loadapp, genie
+export serve, up, down, loadapp, genie, bootstrap, isrunning
 @reexport using .Router
 
+const assets_config = Genie.Assets.assets_config
+
 """
-    serve(path::String = Genie.config.server_document_root, params...; kwparams...)
+    serve(path::String = pwd(), params...; kwparams...)
 
 Serves a folder of static files located at `path`. Allows Genie to be used as a static files web server.
 The `params` and `kwparams` arguments are forwarded to `Genie.startup()`.
@@ -76,15 +81,15 @@ julia> Genie.serve("public", 8888, async = false, verbose = true)
 [ Info: Accept (1):  🔗    0↑     0↓    1s 127.0.0.1:8888:8888 ≣16
 ```
 """
-function serve(path::String = Genie.config.server_document_root, params...; kwparams...)
+function serve(path::String = pwd(), params...; kwparams...)
   cd(path)
-  path = "."
+  path = ""
 
   Router.route("/") do
     Router.serve_static_file(path, root = path)
   end
   Router.route(".*") do
-    Router.serve_static_file(Router.@params(:REQUEST).target, root = path)
+    Router.serve_static_file(Router.params(:REQUEST).target, root = path)
   end
 
   up(params...; kwparams...)
@@ -132,13 +137,12 @@ julia> Genie.newapp("MyGenieApp")
 2019-08-06 16:54:32:DEBUG:Main: Web Server running at http://127.0.0.1:8000
 ```
 """
-const newapp = Generator.newapp
-
+const newapp  = Generator.newapp
+const new     = Generator.newapp
 
 const newapp_webservice = Generator.newapp_webservice
 const newapp_mvc = Generator.newapp_mvc
 const newapp_fullstack = Generator.newapp_fullstack
-const new = Generator.new
 
 
 """
@@ -192,6 +196,8 @@ function loadapp(path::String = "."; autostart::Bool = false) :: Nothing
   nothing
 end
 
+const go = loadapp
+
 
 """
     startup(port::Int = Genie.config.server_port, host::String = Genie.config.server_host;
@@ -214,9 +220,9 @@ Web Server starting at http://127.0.0.1:8000
 """
 const startup = AppServer.startup
 const up = startup
-
-
 const down = AppServer.down
+const isrunning = AppServer.isrunning
+const down! = AppServer.down!
 
 
 ### PRIVATE ###
@@ -235,26 +241,20 @@ end
 
 
 """
-    genie() :: Nothing
-
-Formerly, this has been `genie.jl` in an app's base directory.
+    genie() :: Union{Nothing,Sockets.TCPServer}
 """
-function genie(; context = @__MODULE__) :: Nothing
+function genie(; context = @__MODULE__) :: Union{Nothing,Sockets.TCPServer}
   haskey(ENV, "GENIE_ENV") || (ENV["GENIE_ENV"] = "dev")
-
-  if !haskey(ENV, "HOST")
-    ENV["HOST"] = (ENV["GENIE_ENV"] == "dev") ? "127.0.0.1" : "0.0.0.0"
-  end
 
   ### EARLY BIND TO PORT FOR HOSTS WITH TIMEOUT ###
   EARLYBINDING = if haskey(ENV, "EARLYBIND") && lowercase(ENV["EARLYBIND"]) == "true" && haskey(ENV, "PORT")
-    printstyled("\nEarly binding to host $(ENV["HOST"]) and port $(ENV["PORT"]) \n", color = :light_blue, bold = true)
+    @info "Binding to host $(ENV["HOST"]) and port $(ENV["PORT"]) \n"
     try
       Sockets.listen(parse(Sockets.IPAddr, ENV["HOST"]), parse(Int, ENV["PORT"]))
     catch ex
-      @show ex
+      @error ex
 
-      printstyled("\nFailed early binding!\n", color = :red, bold = true)
+      @warn "Failed binding! \n"
       nothing
     end
   else
@@ -262,14 +262,14 @@ function genie(; context = @__MODULE__) :: Nothing
   end
 
   ### OFF WE GO! ###
-  ROOT_PATH = pwd()
-  push!(LOAD_PATH, ROOT_PATH, "src")
+  push!(LOAD_PATH, pwd(), "src")
 
   load(context = context)
   run(server = EARLYBINDING)
 
-  nothing
+  EARLYBINDING
 end
 
+const bootstrap = genie
 
 end

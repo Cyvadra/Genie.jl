@@ -1,22 +1,24 @@
 @safetestset "Advanced rendering" begin
 
-  @safetestset "@foreach macro renders local variables" begin
+  @safetestset "for_each renders local variables" begin
     using Genie
     using Genie.Renderer.Html
+    import Genie.Util: fws
 
     view = raw"""
 <ol>
-<% @foreach(["a", "b", "c"]) do letter %>
+<% for_each(["a", "b", "c"]) do letter %>
 <li>$(letter)</li>
 <% end %>
 </ol>"""
 
     r = html(view)
 
-    @test String(r.body) == "<!DOCTYPE html><html><head></head><body><ol><li>a</li><li>b</li><li>c</li></ol></body></html>"
+    @test String(r.body) |> fws ==
+          "<!DOCTYPE html><html><body><ol><li>a</li><li>b</li><li>c</li></ol></body></html>" |> fws
   end;
 
-  @safetestset "@foreach macro can not access module variables" begin
+  @safetestset "for_each can not access module variables" begin
     using Genie
     using Genie.Renderer.Html
 
@@ -24,7 +26,7 @@
 
     view = raw"""
 <ol>
-<% @foreach(["a", "b", "c"]) do letter %>
+<% for_each(["a", "b", "c"]) do letter %>
 <li>$(letter) = $x</li>
 <% end %>
 </ol>"""
@@ -32,37 +34,39 @@
     @test_throws UndefVarError html(view)
   end;
 
-  @safetestset "@foreach macro can access view variables" begin
+  @safetestset "for_each can access view variables" begin
     using Genie
     using Genie.Renderer.Html
+    import Genie.Util: fws
 
     view = raw"""
 <ol>
-<% @foreach(["a", "b", "c"]) do letter %>
-<li>$(letter) = $(@vars(:x))</li>
+<% for_each(["a", "b", "c"]) do letter %>
+<li>$(letter) = $(vars(:x))</li>
 <% end %>
 </ol>"""
 
     r = html(view, x = 100)
 
-    @test String(r.body) == "<!DOCTYPE html><html><head></head><body><ol><li>a = 100</li><li>b = 100</li><li>c = 100</li></ol></body></html>"
+    @test String(r.body) |> fws ==
+          "<!DOCTYPE html><html><body><ol><li>a = 100</li><li>b = 100</li><li>c = 100</li></ol></body></html>" |> fws
   end;
 
-  @safetestset "@foreach macro can access context variables" begin
+  @safetestset "for_each can access context variables" begin
     using Genie
     using Genie.Renderer.Html
-
-    x = 200
+    import Genie.Util: fws
 
     view = raw"""
 <ol>
-<% @foreach(["a", "b", "c"]) do letter %>
+<% for_each(["a", "b", "c"]) do letter %>
 <li>$(letter) = $x</li>
 <% end %>
 </ol>"""
 
-    r = html(view, context = @__MODULE__)
+    r = html(view, context = @__MODULE__, x = 200)
 
-    @test_broken String(r.body) == "<html><head></head><body><ol><li>a = 200</li><li>b = 200</li><li>c = 200</li></ol></body></html>"
+    @test String(r.body) |> fws ==
+          "<!DOCTYPE html><html><body><ol><li>a = 200</li><li>b = 200</li><li>c = 200</li></ol></body></html>" |> fws
   end;
 end;

@@ -3,7 +3,7 @@ Handles WebSockets communication logic.
 """
 module WebChannels
 
-import HTTP, Distributed, Logging
+import HTTP, Distributed, Logging, JSON3
 import Genie, Genie.Renderer
 
 const ClientId = UInt # web socket hash
@@ -27,6 +27,10 @@ mutable struct ChannelMessage
   client::ClientId
   message::String
   payload::MessagePayload
+end
+
+function JSON3.StructTypes.StructType(::Type{T}) where {T<:ChannelMessage}
+  JSON3.StructTypes.Struct()
 end
 
 const CLIENTS = ChannelClientsCollection()
@@ -205,9 +209,11 @@ end
 
 
 """
-Pushes `msg` (and `payload`) to all the clients subscribed to the channels in `channels`.
+Pushes `msg` (and `payload`) to all the clients subscribed to the channels in `channels`, with the exception of `except`.
 """
-function broadcast(channels::Union{ChannelName,Vector{ChannelName}}, msg::String;
+function broadcast(channels::Union{ChannelName,Vector{ChannelName}},
+                    msg::String,
+                    payload::Union{Dict,Nothing} = nothing;
                     except::Union{HTTP.WebSockets.WebSocket,Nothing,UInt} = nothing) :: Bool
   isa(channels, Array) || (channels = ChannelName[channels])
 
@@ -216,28 +222,13 @@ function broadcast(channels::Union{ChannelName,Vector{ChannelName}}, msg::String
 
     for client in SUBSCRIPTIONS[channel]
       except !== nothing && client == id(except) && continue
+      CLIENTS[client].client.txclosed && CLIENTS[client].client.rxclosed && continue
 
       try
-        message(client, msg)
-      catch ex
-        @error ex
-      end
-    end
-  end
-
-  true
-end
-function broadcast(channels::Union{ChannelName,Vector{ChannelName}}, msg::String, payload::Dict) :: Bool
-  isa(channels, Array) || (channels = [channels])
-
-  for channel in channels
-    haskey(SUBSCRIPTIONS, channel) || throw(ChannelNotFoundException(channel))
-
-    for client in SUBSCRIPTIONS[channel]
-      try
-        message(client, ChannelMessage(channel, client, msg, payload) |> Renderer.Json.JSONParser.json)
-      catch ex
-        @error ex
+        payload !== nothing ?
+          message(client, ChannelMessage(channel, client, msg, payload) |> Renderer.Json.JSONParser.json) :
+          message(client, msg)
+      catch
       end
     end
   end
@@ -247,22 +238,24 @@ end
 
 
 """
-Pushes `msg` (and `payload`) to all the clients subscribed to all the channels.
+Pushes `msg` (and `payload`) to all the clients subscribed to the channels in `channels`, with the exception of `except`.
 """
-function broadcast(msg::String, payload::Union{Dict,Nothing} = nothing) :: Bool
-  payload === nothing ?
-    broadcast(collect(keys(SUBSCRIPTIONS)), msg) :
-    broadcast(collect(keys(SUBSCRIPTIONS)), msg, payload)
+function broadcast(msg::String;
+                    channels::Union{Union{ChannelName,Vector{ChannelName}},Nothing} = nothing,
+                    payload::Union{Dict,Nothing} = nothing,
+                    except::Union{HTTP.WebSockets.WebSocket,Nothing,UInt} = nothing) :: Bool
+  channels === nothing && (channels = collect(keys(SUBSCRIPTIONS)))
+  broadcast(channels, msg, payload; except = except)
 end
 
 
 """
-Pushes `msg` (and `payload`) to `channel`.
+Pushes `js_code` (a JavaScript piece of code) to be executed by all the clients subscribed to the channels in `channels`,
+with the exception of `except`.
 """
-function message(channel::ChannelName, msg::String, payload::Union{Dict,Nothing} = nothing) :: Bool
-  payload === nothing ?
-    broadcast(channel, msg) :
-    broadcast(channel, msg, payload)
+function jscomm(js_code::String, channels::Union{Union{ChannelName,Vector{ChannelName}},Nothing} = nothing;
+            except::Union{HTTP.WebSockets.WebSocket,Nothing,UInt} = nothing)
+  broadcast(string(Genie.config.webchannels_eval_command, js_code); channels = channels, except = except)
 end
 
 
